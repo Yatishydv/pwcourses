@@ -5,11 +5,11 @@ const nextConfig: NextConfig = {
     return [
       {
         source: '/api/:path*',
-        destination: 'http://172.28.128.193:5555/api/:path*',
+        destination: 'https://pwcourses.onrender.com/api/:path*',
       },
       {
         source: '/socket.io/:path*',
-        destination: 'http://172.28.128.193:5555/socket.io/:path*',
+        destination: 'https://pwcourses.onrender.com/socket.io/:path*',
       }
     ];
   },
