@@ -70,7 +70,7 @@ export default function DownloadPage() {
             <span className={styles.featureIcon}>💬</span>
             <h3 className={styles.featureTitle}>Doubt Sessions</h3>
             <p className={styles.featureDesc}>
-              Connect with batchmates and teachers directly to resolve queries in private course chats.
+              Connect with batchmates and teachers directly to resolve queries in course chats.
             </p>
           </div>
         </section>
