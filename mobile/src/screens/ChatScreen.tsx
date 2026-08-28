@@ -24,7 +24,14 @@ export default function ChatScreen() {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const [isUnlocking, setIsUnlocking] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
+  const [isTyping, setIsTyping] = useState(false);
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const [hasNewMessages, setHasNewMessages] = useState(false);
   const flatListRef = useRef<FlatList>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const EMOJIS = [
     '😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚',
@@ -56,7 +63,9 @@ export default function ChatScreen() {
   };
 
   const handleUnlock = async () => {
+    if (isUnlocking) return;
     setError('');
+    setIsUnlocking(true);
     try {
       const token = await getSession();
       const res = await fetch(`${API_URL}/api/chats/${conversationId}/unlock`, {
@@ -81,13 +90,44 @@ export default function ChatScreen() {
       });
 
       socketRef.current.emit('join_chat', { conversationId, chatAuthToken: chatToken });
-      socketRef.current.on('new_message', (msg) => {
+      socketRef.current.on('new_message', (payload) => {
         setMessages(prev => {
-          // Prevent duplicate if we sent it (optimistic UI already handles it)
-          if (msg.senderId === meId) return prev;
-          if (prev.find(m => m.id === msg.id)) return prev;
-          return [...prev, msg];
+          if (prev.find(m => m.id === payload.id)) return prev;
+          if (payload.clientMsgId) {
+            const tempIdx = prev.findIndex(m => m.id === payload.clientMsgId);
+            if (tempIdx !== -1) {
+              const next = [...prev];
+              next[tempIdx] = payload;
+              return next;
+            }
+          }
+          // If we receive a message and aren't near the bottom, show the new message badge
+          if (payload.senderId !== meId && !isNearBottom) {
+            setHasNewMessages(true);
+          }
+          return [...prev, payload];
         });
+        
+        // Mark as read if we receive it while in chat
+        if (payload.senderId !== meId) {
+          socketRef.current?.emit('mark_read', { conversationId, messageIds: [payload.id] });
+        }
+      });
+
+      socketRef.current.on('typing_start', ({ userId, conversationId: cid }) => {
+        if (cid === conversationId) {
+          setTypingUsers(prev => new Set(prev).add(userId));
+        }
+      });
+
+      socketRef.current.on('typing_stop', ({ userId, conversationId: cid }) => {
+        if (cid === conversationId) {
+          setTypingUsers(prev => {
+            const next = new Set(prev);
+            next.delete(userId);
+            return next;
+          });
+        }
       });
 
       socketRef.current.on('reaction_added', ({ messageId, reaction }) => {
@@ -133,6 +173,8 @@ export default function ChatScreen() {
 
     } catch (err: any) {
       setError(err.message);
+    } finally {
+      setIsUnlocking(false);
     }
   };
 
@@ -177,6 +219,7 @@ export default function ChatScreen() {
   };
 
   const handleSend = async () => {
+    if (isSending) return;
     if (!messageInput.trim()) return;
 
     if (editingMessageId) {
@@ -200,10 +243,13 @@ export default function ChatScreen() {
         });
       } catch (err) {
         console.error(err);
+      } finally {
+        setIsSending(false);
       }
       return;
     }
 
+    setIsSending(true);
     const content = messageInput;
     const replyId = replyToMessage?.id;
     
@@ -235,7 +281,8 @@ export default function ChatScreen() {
         },
         body: JSON.stringify({ 
           content,
-          replyToId: replyId 
+          replyToId: replyId,
+          clientMsgId: tempId
         })
       });
       
@@ -248,6 +295,8 @@ export default function ChatScreen() {
     } catch (err) {
       console.error(err);
       setMessages(prev => prev.filter(m => m.id !== tempId));
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -292,6 +341,34 @@ export default function ChatScreen() {
     }
   };
 
+  const handleTextChange = (text: string) => {
+    setMessageInput(text);
+    if (!isTyping) {
+      setIsTyping(true);
+      socketRef.current?.emit('typing_start', { conversationId });
+    }
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      setIsTyping(false);
+      socketRef.current?.emit('typing_stop', { conversationId });
+    }, 1500);
+  };
+
+  const handleScroll = (event: any) => {
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    const paddingToBottom = 50;
+    const isNear = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom;
+    setIsNearBottom(isNear);
+    if (isNear) {
+      setHasNewMessages(false);
+    }
+  };
+
+  const scrollToBottom = () => {
+    flatListRef.current?.scrollToEnd({ animated: true });
+    setHasNewMessages(false);
+  };
+
   if (!unlocked) {
     return (
       <View style={styles.container}>
@@ -311,8 +388,8 @@ export default function ChatScreen() {
           />
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
-          <TouchableOpacity style={styles.button} onPress={handleUnlock}>
-            <Text style={styles.buttonText}>Unlock Chat</Text>
+          <TouchableOpacity style={styles.button} onPress={handleUnlock} disabled={isUnlocking}>
+            <Text style={styles.buttonText}>{isUnlocking ? 'Unlocking...' : 'Unlock Chat'}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -337,7 +414,13 @@ export default function ChatScreen() {
 
       <FlatList
         ref={flatListRef}
-        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
+        onContentSizeChange={() => {
+          if (isNearBottom) {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }
+        }}
         onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
         data={messages}
         keyExtractor={item => item.id}
@@ -376,8 +459,27 @@ export default function ChatScreen() {
             </TouchableOpacity>
           );
         }}
-        contentContainerStyle={{ padding: 16, gap: 8 }}
+        contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: 32 }}
       />
+
+      {typingUsers.size > 0 && (
+        <View style={styles.typingIndicatorWrapper}>
+          <Text style={styles.typingText}>
+            {Array.from(typingUsers).length === 1 ? 'Someone is typing' : 'Multiple people are typing'}
+          </Text>
+          <View style={styles.bouncingDots}>
+            <Text style={styles.dot}>●</Text>
+            <Text style={styles.dot}>●</Text>
+            <Text style={styles.dot}>●</Text>
+          </View>
+        </View>
+      )}
+
+      {hasNewMessages && (
+        <TouchableOpacity style={styles.newMessageBadge} onPress={scrollToBottom}>
+          <Text style={styles.newMessageText}>New Message ↓</Text>
+        </TouchableOpacity>
+      )}
 
       <View style={styles.inputAreaWrapper}>
         {replyToMessage && (
@@ -405,7 +507,8 @@ export default function ChatScreen() {
             placeholder={editingMessageId ? "Edit your message..." : "Type a message..."}
             placeholderTextColor="#94a3b8"
             value={messageInput}
-            onChangeText={setMessageInput}
+            onChangeText={handleTextChange}
+            multiline
           />
           <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
             <Text style={{ color: 'white' }}>➤</Text>
@@ -464,47 +567,56 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#ffffff', justifyContent: 'center', padding: 16 },
+  container: { flex: 1, backgroundColor: '#f8fafc', justifyContent: 'center', padding: 16 },
   chatContainer: { flex: 1, backgroundColor: '#ffffff' },
-  lockCard: { backgroundColor: '#f1f5f9', padding: 32, borderRadius: 24, alignItems: 'center' },
-  title: { fontSize: 18, fontWeight: 'bold', color: '#000000' },
-  subtitle: { color: '#666666', marginBottom: 24, textAlign: 'center', marginTop: 8 },
-  input: { width: '100%', backgroundColor: '#ffffff', color: '#000000', padding: 16, borderRadius: 12, marginBottom: 16, borderWidth: 1, borderColor: '#cccccc' },
-  button: { width: '100%', backgroundColor: '#e32b2b', padding: 16, borderRadius: 12, alignItems: 'center' },
+  lockCard: { backgroundColor: '#ffffff', padding: 32, borderRadius: 24, alignItems: 'center', elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.1, shadowRadius: 20 },
+  title: { fontSize: 20, fontWeight: '700', color: '#1e293b' },
+  subtitle: { color: '#64748b', marginBottom: 24, textAlign: 'center', marginTop: 8 },
+  input: { width: '100%', backgroundColor: '#f8fafc', color: '#0f172a', padding: 16, borderRadius: 12, marginBottom: 16, borderWidth: 1, borderColor: '#e2e8f0', fontSize: 24, fontWeight: 'bold' },
+  button: { width: '100%', backgroundColor: '#3b82f6', padding: 16, borderRadius: 12, alignItems: 'center', elevation: 2, shadowColor: '#3b82f6', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
   buttonText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
-  error: { color: '#ef4444', marginBottom: 12 },
+  error: { color: '#ef4444', marginBottom: 12, fontWeight: '500' },
   
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#f1f5f9', backgroundColor: '#ffffff', paddingTop: Platform.OS === 'ios' ? 48 : 16 },
   messageWrapper: { maxWidth: '75%' },
   sent: { alignSelf: 'flex-end' },
   received: { alignSelf: 'flex-start' },
-  messageBubble: { padding: 12, borderRadius: 16 },
-  sentBubble: { backgroundColor: '#e32b2b', borderBottomRightRadius: 4 },
-  receivedBubble: { backgroundColor: '#f1f5f9', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#cccccc' },
-  sentText: { color: 'white' },
-  receivedText: { color: '#000000' },
-  inputAreaWrapper: { backgroundColor: '#ffffff' },
-  inputArea: { flexDirection: 'row', padding: 16, borderTopWidth: 1, borderTopColor: '#f1f5f9', gap: 12 },
-  messageInput: { flex: 1, backgroundColor: '#f1f5f9', color: '#000000', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 24 },
-  sendButton: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#e32b2b', justifyContent: 'center', alignItems: 'center' },
+  messageBubble: { padding: 14, borderRadius: 20 },
+  sentBubble: { backgroundColor: '#3b82f6', borderBottomRightRadius: 4 },
+  receivedBubble: { backgroundColor: '#f1f5f9', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#e2e8f0' },
+  sentText: { color: '#ffffff', fontSize: 15, lineHeight: 22 },
+  receivedText: { color: '#0f172a', fontSize: 15, lineHeight: 22 },
   
-  reactionsRow: { flexDirection: 'row', backgroundColor: '#ffffff', borderRadius: 12, paddingHorizontal: 6, paddingVertical: 2, marginTop: -8, elevation: 1, shadowColor: '#000', shadowOffset: {width:0,height:1}, shadowOpacity: 0.1, shadowRadius: 2, zIndex: 10 },
+  inputAreaWrapper: { backgroundColor: '#ffffff', borderTopWidth: 1, borderTopColor: '#f1f5f9' },
+  inputArea: { flexDirection: 'row', padding: 12, paddingBottom: Platform.OS === 'ios' ? 24 : 12, alignItems: 'flex-end', gap: 12 },
+  messageInput: { flex: 1, backgroundColor: '#f1f5f9', color: '#0f172a', paddingHorizontal: 20, paddingTop: 14, paddingBottom: 14, borderRadius: 24, fontSize: 15, maxHeight: 120 },
+  sendButton: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center', elevation: 2, shadowColor: '#3b82f6', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
+  
+  reactionsRow: { flexDirection: 'row', backgroundColor: '#ffffff', borderRadius: 20, paddingHorizontal: 8, paddingVertical: 4, marginTop: -12, elevation: 2, shadowColor: '#000', shadowOffset: {width:0,height:2}, shadowOpacity: 0.1, shadowRadius: 4, zIndex: 10, borderWidth: 1, borderColor: '#e2e8f0' },
   reactionEmoji: { fontSize: 14, marginHorizontal: 2 },
   
-  repliedMessage: { backgroundColor: '#f1f5f9', padding: 8, borderRadius: 8, marginBottom: 4, opacity: 0.8 },
-  repliedText: { fontSize: 12, color: '#666666', fontStyle: 'italic' },
+  repliedMessage: { backgroundColor: 'rgba(0,0,0,0.05)', padding: 10, borderRadius: 12, marginBottom: 6 },
+  repliedText: { fontSize: 13, color: '#64748b', fontStyle: 'italic' },
   
-  replyPreview: { flexDirection: 'row', justifyContent: 'space-between', padding: 12, backgroundColor: '#f8fafc', borderTopWidth: 1, borderTopColor: '#f1f5f9' },
-  replyPreviewText: { color: '#666666', flex: 1, marginRight: 8, fontSize: 14 },
+  replyPreview: { flexDirection: 'row', justifyContent: 'space-between', padding: 12, backgroundColor: '#f8fafc', borderTopWidth: 1, borderTopColor: '#e2e8f0', alignItems: 'center' },
+  replyPreviewText: { color: '#64748b', flex: 1, marginRight: 8, fontSize: 14, fontStyle: 'italic' },
   
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  emojiCard: { backgroundColor: '#ffffff', padding: 24, borderRadius: 24, width: '80%' },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 16, textAlign: 'center' },
-  replyActionBtn: { backgroundColor: '#f1f5f9', padding: 12, borderRadius: 12, marginBottom: 16, alignItems: 'center' },
-  replyActionText: { fontWeight: 'bold', color: '#333333' },
+  emojiCard: { backgroundColor: '#ffffff', padding: 24, borderRadius: 24, width: '85%', maxHeight: '80%', elevation: 10, shadowColor: '#000', shadowOffset: {width:0,height:10}, shadowOpacity: 0.2, shadowRadius: 20 },
+  modalTitle: { fontSize: 16, fontWeight: '700', marginBottom: 16, textAlign: 'center', color: '#64748b', textTransform: 'uppercase', letterSpacing: 1 },
+  replyActionBtn: { backgroundColor: '#f8fafc', padding: 16, borderRadius: 16, marginBottom: 12, alignItems: 'center' },
+  replyActionText: { fontWeight: '600', color: '#334155', fontSize: 16 },
   emojiGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12 },
-  emojiBtn: { padding: 8, backgroundColor: '#f8fafc', borderRadius: 16 },
-  readReceipt: { fontSize: 10, alignSelf: 'flex-end', marginTop: 4 },
-  readColor: { color: '#ffffff' },
-  unreadColor: { color: 'rgba(255,255,255,0.6)' }
+  emojiBtn: { padding: 10, backgroundColor: '#f8fafc', borderRadius: 20 },
+  readReceipt: { fontSize: 10, alignSelf: 'flex-end', marginTop: 4, letterSpacing: -1 },
+  readColor: { color: '#93c5fd' },
+  unreadColor: { color: 'rgba(255,255,255,0.6)' },
+
+  typingIndicatorWrapper: { flexDirection: 'row', alignItems: 'center', padding: 12, paddingHorizontal: 16, backgroundColor: '#ffffff' },
+  typingText: { fontSize: 13, color: '#94a3b8', marginRight: 8, fontStyle: 'italic' },
+  bouncingDots: { flexDirection: 'row', gap: 2, paddingTop: 4 },
+  dot: { color: '#cbd5e1', fontSize: 10 },
+  
+  newMessageBadge: { position: 'absolute', bottom: 90, alignSelf: 'center', backgroundColor: '#3b82f6', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, elevation: 4, shadowColor: '#3b82f6', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4, zIndex: 100 },
+  newMessageText: { color: 'white', fontWeight: 'bold', fontSize: 13 }
 });

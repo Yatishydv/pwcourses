@@ -61,6 +61,7 @@ export default function Dashboard() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chatAuthTokens, setChatAuthTokens] = useState<Record<string, string>>({});
   const [isUnlocking, setIsUnlocking] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatPinInput, setChatPinInput] = useState('');
@@ -115,10 +116,23 @@ export default function Dashboard() {
       auth: { token: sessionToken }
     });
 
-    socketRef.current.on('new_message', (msg: Message) => {
+    socketRef.current.on('new_message', (payload: any) => {
       setMessages((prev) => {
-        if (prev.find(m => m.id === msg.id)) return prev;
-        return [...prev, msg];
+        // 1. If we already have the real message, return
+        if (prev.find(m => m.id === payload.id)) return prev;
+        
+        // 2. If it's our own optimistic message coming back, replace it
+        if (payload.clientMsgId) {
+          const tempIdx = prev.findIndex(m => m.id === payload.clientMsgId);
+          if (tempIdx !== -1) {
+            const next = [...prev];
+            next[tempIdx] = payload;
+            return next;
+          }
+        }
+        
+        // 3. Otherwise append
+        return [...prev, payload];
       });
       // Mark as read if active
       if (activeChatId && msg.conversationId === activeChatId && msg.senderId !== me?.id) {
@@ -186,10 +200,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!activeChatId || !chatAuthTokens[activeChatId]) return;
-    const interval = setInterval(() => {
-      fetchMessages(activeChatId, chatAuthTokens[activeChatId]);
-    }, 5000);
-    return () => clearInterval(interval);
+    // Initial fetch only, NO POLLING (polling overwrites state and resurrects deleted messages)
+    fetchMessages(activeChatId, chatAuthTokens[activeChatId]);
   }, [activeChatId, chatAuthTokens]);
 
   useEffect(() => {
@@ -446,6 +458,7 @@ export default function Dashboard() {
 
   const handleSendMessage = async (e: FormEvent) => {
     e.preventDefault();
+    if (isSending) return;
     if (!activeChatId || !messageInput.trim()) return;
 
     const token = chatAuthTokens[activeChatId];
@@ -471,10 +484,13 @@ export default function Dashboard() {
         });
       } catch (err) {
         console.error(err);
+      } finally {
+        setIsSending(false);
       }
       return;
     }
 
+    setIsSending(true);
     const content = messageInput;
     const replyId = replyToMessage?.id;
     
@@ -506,7 +522,7 @@ export default function Dashboard() {
           'x-chat-auth': token 
         },
         credentials: 'include',
-        body: JSON.stringify({ content, replyToId: replyId })
+        body: JSON.stringify({ content, replyToId: replyId, clientMsgId: tempId })
       });
       const data = await res.json();
       
@@ -518,6 +534,8 @@ export default function Dashboard() {
     } catch (err) {
       console.error(err);
       setMessages(prev => prev.filter(m => m.id !== tempId));
+    } finally {
+      setIsSending(false);
     }
   };
 

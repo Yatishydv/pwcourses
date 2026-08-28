@@ -27,7 +27,7 @@ export const getMessages = async (req: Request, res: Response): Promise<void> =>
 
 export const sendMessage = async (req: Request, res: Response): Promise<void> => {
   const conversationId = req.params.conversationId as string;
-  const { content, replyToId } = req.body;
+  const { content, replyToId, clientMsgId } = req.body;
   // @ts-ignore
   const userId = req.userId;
 
@@ -50,8 +50,7 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
       }
     });
 
-    const { getIo } = require('../socket');
-    getIo().to(`chat_${conversationId}`).emit('new_message', message);
+    getIo().to(`chat_${conversationId}`).emit('new_message', { ...message, clientMsgId });
     
     // Emit notification to receiver's personal room and via Expo Push
     const conv: any = await prisma.conversation.findUnique({
