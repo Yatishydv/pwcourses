@@ -80,22 +80,31 @@ export default function ChatScreen() {
         });
       });
 
-      socketRef.current.on('add_reaction', ({ messageId, reaction }) => {
+      socketRef.current.on('reaction_added', ({ messageId, reaction }) => {
         setMessages(prev => prev.map(m => {
           if (m.id === messageId) {
             const rx = m.reactions || [];
             if (!rx.find((r:any) => r.id === reaction.id)) {
-              return { ...m, reactions: [...rx, reaction] };
+              return { ...m, reactions: [...rx.filter((r:any) => r.userId !== reaction.userId || r.emoji !== reaction.emoji), reaction] };
             }
           }
           return m;
         }));
       });
 
-      socketRef.current.on('remove_reaction', ({ messageId, reactionId }) => {
+      socketRef.current.on('reaction_removed', ({ messageId, userId, emoji }) => {
         setMessages(prev => prev.map(m => {
           if (m.id === messageId) {
-            return { ...m, reactions: (m.reactions || []).filter((r:any) => r.id !== reactionId) };
+            return { ...m, reactions: (m.reactions || []).filter((r:any) => r.userId !== userId || r.emoji !== emoji) };
+          }
+          return m;
+        }));
+      });
+
+      socketRef.current.on('messages_read', ({ messageIds }) => {
+        setMessages(prev => prev.map(m => {
+          if (messageIds.includes(m.id)) {
+            return { ...m, read: true };
           }
           return m;
         }));
@@ -119,6 +128,14 @@ export default function ChatScreen() {
     if (res.ok) {
       const data = await res.json();
       setMessages(data.messages);
+      
+      const unreadIds = data.messages
+        .filter((m: any) => !m.read && m.senderId !== meId)
+        .map((m: any) => m.id);
+        
+      if (unreadIds.length > 0) {
+        socketRef.current?.emit('mark_read', { conversationId, messageIds: unreadIds });
+      }
     }
   };
 
@@ -143,9 +160,29 @@ export default function ChatScreen() {
 
   const handleSend = async () => {
     if (!messageInput.trim()) return;
+    const content = messageInput;
+    const replyId = replyToMessage?.id;
+    
+    // Optimistic UI update
+    const tempId = `temp-${Date.now()}`;
+    const tempMessage = {
+      id: tempId,
+      content,
+      senderId: meId,
+      conversationId,
+      createdAt: new Date().toISOString(),
+      read: false,
+      replyTo: replyToMessage,
+      reactions: []
+    };
+    
+    setMessages(prev => [...prev, tempMessage]);
+    setMessageInput('');
+    setReplyToMessage(null);
+
     try {
       const token = await getSession();
-      await fetch(`${API_URL}/api/chats/${conversationId}/messages`, {
+      const res = await fetch(`${API_URL}/api/chats/${conversationId}/messages`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -153,36 +190,46 @@ export default function ChatScreen() {
           'x-chat-auth': chatAuthToken 
         },
         body: JSON.stringify({ 
-          content: messageInput,
-          replyToId: replyToMessage?.id 
+          content,
+          replyToId: replyId 
         })
       });
-      setMessageInput('');
-      setReplyToMessage(null);
+      
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(prev => prev.map(m => m.id === tempId ? data.message : m));
+      } else {
+        setMessages(prev => prev.filter(m => m.id !== tempId));
+      }
     } catch (err) {
       console.error(err);
+      setMessages(prev => prev.filter(m => m.id !== tempId));
     }
   };
 
   const handleReact = async (emoji: string) => {
-    if (!selectedMessageId) return;
-    try {
-      const token = await getSession();
-      await fetch(`${API_URL}/api/chats/${conversationId}/messages/${selectedMessageId}/react`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          'x-chat-auth': chatAuthToken 
-        },
-        body: JSON.stringify({ emoji })
-      });
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setShowEmojiPicker(false);
-      setSelectedMessageId(null);
-    }
+    if (!selectedMessageId || !meId) return;
+    
+    // Optimistic update
+    setMessages(prev => prev.map(m => {
+      if (m.id === selectedMessageId) {
+        const reactions = m.reactions || [];
+        const existing = reactions.find((r:any) => r.userId === meId && r.emoji === emoji);
+        
+        if (existing) {
+          return { ...m, reactions: reactions.filter((r:any) => r.id !== existing.id) };
+        } else {
+          const newReaction = { id: `temp-${Date.now()}`, messageId: selectedMessageId, userId: meId, emoji };
+          return { ...m, reactions: [...reactions, newReaction] };
+        }
+      }
+      return m;
+    }));
+
+    socketRef.current?.emit('react_message', { conversationId, messageId: selectedMessageId, emoji });
+    
+    setShowEmojiPicker(false);
+    setSelectedMessageId(null);
   };
 
   if (!unlocked) {
@@ -250,11 +297,16 @@ export default function ChatScreen() {
               )}
               <View style={[styles.messageBubble, isMe ? styles.sentBubble : styles.receivedBubble]}>
                 <Text style={isMe ? styles.sentText : styles.receivedText}>{item.content}</Text>
+                {isMe && (
+                  <Text style={[styles.readReceipt, item.read ? styles.readColor : styles.unreadColor]}>
+                    {item.read ? '✓✓' : '✓'}
+                  </Text>
+                )}
               </View>
               {rx.length > 0 && (
                 <View style={[styles.reactionsRow, isMe ? { alignSelf: 'flex-end' } : { alignSelf: 'flex-start' }]}>
-                  {rx.map((r:any) => (
-                    <Text key={r.id} style={styles.reactionEmoji}>{r.emoji}</Text>
+                  {Array.from(new Set(rx.map((r:any) => r.emoji))).map((emoji: any) => (
+                    <Text key={emoji} style={styles.reactionEmoji}>{emoji}</Text>
                   ))}
                 </View>
               )}
@@ -354,5 +406,8 @@ const styles = StyleSheet.create({
   replyActionBtn: { backgroundColor: '#f1f5f9', padding: 12, borderRadius: 12, marginBottom: 16, alignItems: 'center' },
   replyActionText: { fontWeight: 'bold', color: '#333333' },
   emojiGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12 },
-  emojiBtn: { padding: 8, backgroundColor: '#f8fafc', borderRadius: 16 }
+  emojiBtn: { padding: 8, backgroundColor: '#f8fafc', borderRadius: 16 },
+  readReceipt: { fontSize: 10, alignSelf: 'flex-end', marginTop: 4 },
+  readColor: { color: '#ffffff' },
+  unreadColor: { color: 'rgba(255,255,255,0.6)' }
 });

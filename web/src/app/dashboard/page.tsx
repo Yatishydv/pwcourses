@@ -371,6 +371,29 @@ export default function Dashboard() {
     const token = chatAuthTokens[activeChatId];
     if (!token) return;
 
+    const content = messageInput;
+    const replyId = replyToMessage?.id;
+    
+    // Optimistic UI update
+    const tempId = `temp-${Date.now()}`;
+    const tempMessage: Message = {
+      id: tempId,
+      content,
+      senderId: me?.id || '',
+      conversationId: activeChatId,
+      createdAt: new Date().toISOString(),
+      read: false,
+      replyTo: replyToMessage || undefined,
+      reactions: []
+    };
+    
+    setMessages(prev => [...prev, tempMessage]);
+    setMessageInput('');
+    setReplyToMessage(null);
+    setShowEmojiPicker(false);
+    socketRef.current?.emit('typing_stop', { conversationId: activeChatId });
+    setIsTyping(false);
+
     try {
       const res = await fetch(`/api/chats/${activeChatId}/messages`, {
         method: 'POST',
@@ -379,24 +402,18 @@ export default function Dashboard() {
           'x-chat-auth': token 
         },
         credentials: 'include',
-        body: JSON.stringify({ content: messageInput, replyToId: replyToMessage?.id })
+        body: JSON.stringify({ content, replyToId: replyId })
       });
       const data = await res.json();
       
       if (res.ok && data.message) {
-        setMessages(prev => {
-          if (prev.find(m => m.id === data.message.id)) return prev;
-          return [...prev, data.message];
-        });
+        setMessages(prev => prev.map(m => m.id === tempId ? data.message : m));
+      } else {
+        setMessages(prev => prev.filter(m => m.id !== tempId));
       }
-      
-      setMessageInput('');
-      setReplyToMessage(null);
-      setShowEmojiPicker(false);
-      socketRef.current?.emit('typing_stop', { conversationId: activeChatId });
-      setIsTyping(false);
     } catch (err) {
       console.error(err);
+      setMessages(prev => prev.filter(m => m.id !== tempId));
     }
   };
 

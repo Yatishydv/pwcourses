@@ -1,5 +1,8 @@
 import { Request, Response } from 'express';
 import prisma from '../prisma';
+import { getIo } from '../socket';
+const { Expo } = require('expo-server-sdk');
+const expo = new Expo();
 
 export const getMessages = async (req: Request, res: Response): Promise<void> => {
   const { conversationId } = req.params;
@@ -68,9 +71,6 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
 
         // Send Expo Push Notification (Fire and forget, do not await so it doesn't block the API response)
         if (receiver.expoPushToken) {
-          const { Expo } = require('expo-server-sdk');
-          const expo = new Expo();
-          
           if (Expo.isExpoPushToken(receiver.expoPushToken)) {
             const sender = conv.members.find((m: any) => m.userId === userId)?.user;
             const senderName = sender ? sender.username : 'Someone';
