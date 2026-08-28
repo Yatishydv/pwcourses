@@ -50,20 +50,44 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
     const { getIo } = require('../socket');
     getIo().to(`chat_${conversationId}`).emit('new_message', message);
     
-    // Emit notification to receiver's personal room
+    // Emit notification to receiver's personal room and via Expo Push
     const conv: any = await prisma.conversation.findUnique({
       where: { id: conversationId as string },
-      include: { members: true }
+      include: { members: { include: { user: true } } }
     });
     
     if (conv) {
-      const receiver = conv.members.find((m: any) => m.userId !== userId);
-      if (receiver) {
-        getIo().to(receiver.userId).emit('notification', {
+      const receiverMember = conv.members.find((m: any) => m.userId !== userId);
+      if (receiverMember) {
+        const receiver = receiverMember.user;
+        getIo().to(receiver.id).emit('notification', {
           type: 'new_message',
           conversationId,
           messageId: message.id
         });
+
+        // Send Expo Push Notification
+        if (receiver.expoPushToken) {
+          const { Expo } = require('expo-server-sdk');
+          const expo = new Expo();
+          
+          if (Expo.isExpoPushToken(receiver.expoPushToken)) {
+            const sender = conv.members.find((m: any) => m.userId === userId)?.user;
+            const senderName = sender ? sender.username : 'Someone';
+            
+            try {
+              await expo.sendPushNotificationsAsync([{
+                to: receiver.expoPushToken,
+                sound: 'default',
+                title: `New message from ${senderName}`,
+                body: message.content,
+                data: { conversationId, messageId: message.id },
+              }]);
+            } catch (err) {
+              console.error('Push notification failed:', err);
+            }
+          }
+        }
       }
     }
 

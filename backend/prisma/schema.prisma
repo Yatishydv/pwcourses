@@ -8,11 +8,12 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  username  String   @unique
-  pin_hash  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  username      String   @unique
+  pin_hash      String
+  expoPushToken String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   sessions       Session[]
   sentRequests   Friendship[] @relation("Requester")

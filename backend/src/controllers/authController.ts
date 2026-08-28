@@ -136,3 +136,20 @@ export const getMe = async (req: Request, res: Response): Promise<void> => {
     res.status(500).json({ error: 'Internal server error' });
   }
 };
+
+export const updatePushToken = async (req: Request, res: Response): Promise<void> => {
+  // @ts-ignore
+  const userId = req.userId;
+  const { pushToken } = req.body;
+
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { expoPushToken: pushToken }
+    });
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to update push token' });
+  }
+};

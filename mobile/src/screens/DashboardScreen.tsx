@@ -27,19 +27,44 @@ export default function DashboardScreen() {
   const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
-    requestPermissions();
     loadData();
     return () => {
       if (socketRef.current) socketRef.current.disconnect();
     };
   }, []);
 
-  const requestPermissions = async () => {
+  const requestPermissions = async (token: string) => {
     const { status } = await Notifications.requestPermissionsAsync();
     if (status !== 'granted') {
       console.log('Notification permissions not granted');
+      return;
+    }
+
+    try {
+      // Get Expo push token
+      const pushTokenData = await Notifications.getExpoPushTokenAsync({
+        projectId: '6584f298-9879-494b-9a53-762bc3a29a68'
+      });
+      const pushToken = pushTokenData.data;
+
+      // Send to backend
+      await fetch(`${API_URL}/api/auth/push-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ pushToken })
+      });
+    } catch (e) {
+      console.error('Failed to get push token', e);
     }
   };
+
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
 
   const loadData = async () => {
     try {
@@ -56,6 +81,8 @@ export default function DashboardScreen() {
       if (!meRes.ok) throw new Error('Not logged in');
       const meData = await meRes.json();
       setMe(meData.user);
+      
+      requestPermissions(token);
 
       if (!socketRef.current) {
         socketRef.current = io(API_URL, {
