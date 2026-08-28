@@ -5,7 +5,7 @@ const { Expo } = require('expo-server-sdk');
 const expo = new Expo();
 
 export const getMessages = async (req: Request, res: Response): Promise<void> => {
-  const { conversationId } = req.params;
+  const conversationId = req.params.conversationId as string;
   
   try {
     const messages = await prisma.message.findMany({
@@ -26,7 +26,7 @@ export const getMessages = async (req: Request, res: Response): Promise<void> =>
 };
 
 export const sendMessage = async (req: Request, res: Response): Promise<void> => {
-  const { conversationId } = req.params;
+  const conversationId = req.params.conversationId as string;
   const { content, replyToId } = req.body;
   // @ts-ignore
   const userId = req.userId;
@@ -103,9 +103,11 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
 };
 
 export const editMessage = async (req: Request, res: Response): Promise<void> => {
-  const { conversationId, messageId } = req.params;
+  const conversationId = req.params.conversationId as string;
+  const messageId = req.params.messageId as string;
   const { content } = req.body;
-  const userId = req.userId!;
+  // @ts-ignore
+  const userId = req.userId;
 
   try {
     const existing = await prisma.message.findUnique({ where: { id: messageId } });
@@ -136,8 +138,10 @@ export const editMessage = async (req: Request, res: Response): Promise<void> =>
 };
 
 export const deleteMessage = async (req: Request, res: Response): Promise<void> => {
-  const { conversationId, messageId } = req.params;
-  const userId = req.userId!;
+  const conversationId = req.params.conversationId as string;
+  const messageId = req.params.messageId as string;
+  // @ts-ignore
+  const userId = req.userId;
 
   try {
     const existing = await prisma.message.findUnique({ where: { id: messageId } });
