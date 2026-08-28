@@ -510,15 +510,27 @@
   border-radius: 20px;
   box-shadow: var(--shadow-md);
   z-index: 10;
-  overflow: hidden;
   white-space: nowrap;
   padding: 4px;
+}
+.messageActions::after {
+  content: '';
+  position: absolute;
+  top: -10px;
+  bottom: -10px;
+  width: 20px;
 }
 .messageWrapper.sent .messageActions {
   right: calc(100% + 10px);
 }
+.messageWrapper.sent .messageActions::after {
+  right: -20px;
+}
 .messageWrapper.received .messageActions {
   left: calc(100% + 10px);
+}
+.messageWrapper.received .messageActions::after {
+  left: -20px;
 }
 .messageWrapper:hover .messageActions,
 .messageWrapper.forceHover .messageActions {

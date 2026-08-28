@@ -60,6 +60,7 @@ export default function Dashboard() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chatAuthTokens, setChatAuthTokens] = useState<Record<string, string>>({});
+  const [isUnlocking, setIsUnlocking] = useState(false);
   
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatPinInput, setChatPinInput] = useState('');
@@ -340,9 +341,13 @@ export default function Dashboard() {
 
   const handleUnlockChat = async (e: FormEvent) => {
     e.preventDefault();
+    if (isUnlocking) return;
     setChatError('');
     if (!activeChatId) return;
 
+    setIsUnlocking(true);
+    console.time('frontend-unlock-total');
+    console.time('frontend-unlock-fetch');
     try {
       const res = await fetch(`/api/chats/${activeChatId}/unlock`, {
         method: 'POST',
@@ -350,17 +355,23 @@ export default function Dashboard() {
         credentials: 'include',
         body: JSON.stringify({ chatPin: chatPinInput })
       });
+      console.timeEnd('frontend-unlock-fetch');
 
       if (!res.ok) throw new Error('Invalid Chat PIN');
       const data = await res.json();
       
+      console.time('frontend-unlock-state');
       const token = data.chatAuthToken;
       setChatAuthTokens(prev => ({ ...prev, [activeChatId]: token }));
+      console.timeEnd('frontend-unlock-state');
       
       socketRef.current?.emit('join_chat', { conversationId: activeChatId, chatAuthToken: token });
       fetchMessages(activeChatId, token); // Do not await to speed up UI transition
+      console.timeEnd('frontend-unlock-total');
     } catch (err: any) {
       setChatError(err.message);
+    } finally {
+      setIsUnlocking(false);
     }
   };
 
@@ -664,7 +675,9 @@ export default function Dashboard() {
               />
               {chatError && <div style={{ color: '#e32b2b' }}>{chatError}</div>}
               
-              <button type="submit" className={styles.unlockButton}>Unlock</button>
+              <button type="submit" className={styles.unlockButton} disabled={isUnlocking}>
+                {isUnlocking ? 'Unlocking...' : 'Unlock'}
+              </button>
             </form>
           </div>
         ) : (

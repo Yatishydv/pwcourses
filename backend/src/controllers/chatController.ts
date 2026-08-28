@@ -99,6 +99,8 @@ export const unlockConversation = async (req: Request, res: Response): Promise<v
   const { chatPin } = req.body;
 
   try {
+    console.time('unlock-total');
+    console.time('unlock-db-fetch');
     if (!chatPin) {
       res.status(400).json({ error: 'Chat PIN is required' });
       return;
@@ -108,6 +110,7 @@ export const unlockConversation = async (req: Request, res: Response): Promise<v
       where: { id: conversationId as string },
       include: { members: true }
     });
+    console.timeEnd('unlock-db-fetch');
 
     if (!conversation) {
       res.status(404).json({ error: 'Conversation not found' });
@@ -120,11 +123,16 @@ export const unlockConversation = async (req: Request, res: Response): Promise<v
       return;
     }
 
+    console.time('unlock-verifyPin');
     const isValid = await verifyPin(conversation.chatPinHash!, chatPin);
+    console.timeEnd('unlock-verifyPin');
+    
     if (!isValid) {
       res.status(401).json({ error: 'Invalid Chat PIN' });
       return;
     }
+
+    console.time('unlock-session-create');
 
     const token = generateSecureToken();
     const expiresAt = new Date();
@@ -138,9 +146,11 @@ export const unlockConversation = async (req: Request, res: Response): Promise<v
         expiresAt
       }
     });
+    console.timeEnd('unlock-session-create');
 
     // We do NOT set a cookie for chat tokens. They must be stored in memory by the client.
     res.status(200).json({ chatAuthToken: token, expiresAt });
+    console.timeEnd('unlock-total');
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Internal server error' });
