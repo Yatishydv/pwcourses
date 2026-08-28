@@ -54,6 +54,7 @@ const EMOJI_CATEGORIES: Record<string, string[]> = {
 
 export default function Dashboard() {
   const router = useRouter();
+  const [isDarkMode, setIsDarkMode] = useState(false);
   const [me, setMe] = useState<User | null>(null);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -65,6 +66,7 @@ export default function Dashboard() {
   const [chatError, setChatError] = useState('');
   const [messageInput, setMessageInput] = useState('');
   const [replyToMessage, setReplyToMessage] = useState<Message | null>(null);
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
   const [isTyping, setIsTyping] = useState(false);
@@ -84,7 +86,21 @@ export default function Dashboard() {
   useEffect(() => {
     fetchMe();
     fetchConversations();
+    
+    // Load theme preference
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'dark') setIsDarkMode(true);
   }, []);
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+    }
+  }, [isDarkMode]);
 
   useEffect(() => {
     if (!sessionToken) return;
@@ -148,6 +164,14 @@ export default function Dashboard() {
         }
         return m;
       }));
+    });
+
+    socketRef.current.on('message_edited', ({ messageId, content }) => {
+      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, content } : m));
+    });
+
+    socketRef.current.on('message_deleted', ({ messageId }) => {
+      setMessages(prev => prev.filter(m => m.id !== messageId));
     });
 
     return () => {
@@ -371,6 +395,30 @@ export default function Dashboard() {
     const token = chatAuthTokens[activeChatId];
     if (!token) return;
 
+    if (editingMessage) {
+      // Edit message logic
+      const content = messageInput;
+      const messageId = editingMessage.id;
+      
+      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, content } : m));
+      setMessageInput('');
+      setEditingMessage(null);
+      setIsTyping(false);
+      socketRef.current?.emit('typing_stop', { conversationId: activeChatId });
+
+      try {
+        await fetch(`/api/chats/${activeChatId}/messages/${messageId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'x-chat-auth': token },
+          credentials: 'include',
+          body: JSON.stringify({ content })
+        });
+      } catch (err) {
+        console.error(err);
+      }
+      return;
+    }
+
     const content = messageInput;
     const replyId = replyToMessage?.id;
     
@@ -432,6 +480,31 @@ export default function Dashboard() {
     }, 2000);
   };
 
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!activeChatId) return;
+    const token = chatAuthTokens[activeChatId];
+    if (!token) return;
+
+    // Optimistic delete
+    setMessages(prev => prev.filter(m => m.id !== messageId));
+    
+    try {
+      await fetch(`/api/chats/${activeChatId}/messages/${messageId}`, {
+        method: 'DELETE',
+        headers: { 'x-chat-auth': token },
+        credentials: 'include'
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const startEditing = (msg: Message) => {
+    setEditingMessage(msg);
+    setMessageInput(msg.content);
+    setReplyToMessage(null);
+  };
+
   const handleReaction = (messageId: string, emoji: string) => {
     if (!activeChatId || !me) return;
 
@@ -481,13 +554,25 @@ export default function Dashboard() {
             <div className={styles.username}>{me?.username}</div>
           </div>
           <div className={styles.actions}>
+            <button className={styles.iconButton} onClick={() => setIsDarkMode(!isDarkMode)} title="Toggle Theme">
+              {isDarkMode ? '☀️' : '🌙'}
+            </button>
             <button className={styles.iconButton} onClick={openFriendsModal} title="Add Friends">➕</button>
             <button className={styles.iconButton} onClick={handleLogout} title="Lock Account">🔒</button>
           </div>
         </div>
+        
+        <div className={styles.searchContainer}>
+          <input type="text" className={styles.searchInput} placeholder="Search" />
+        </div>
+        
         <div className={styles.chatList}>
           {conversations.map(conv => {
             const friend = conv.members[0]?.user;
+            
+            // Calculate unread
+            const isUnlocked = chatAuthTokens[conv.id];
+            
             return (
               <div 
                 key={conv.id} 
@@ -498,8 +583,11 @@ export default function Dashboard() {
                 <div className={styles.chatInfo}>
                   <div className={styles.chatName}>{friend?.username}</div>
                   <div className={styles.chatPreview}>
-                    {chatAuthTokens[conv.id] ? "Tap to view conversation" : "🔒 Protected conversation"}
+                    {isUnlocked ? "Tap to view conversation" : "🔒 Protected"}
                   </div>
+                </div>
+                <div className={styles.chatMeta}>
+                  <div className={styles.chatTime}>now</div>
                 </div>
               </div>
             );
@@ -537,16 +625,24 @@ export default function Dashboard() {
         ) : (
           <div className={styles.chatView}>
             <div className={styles.chatHeader}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                <div className={styles.avatar}>{activeFriend?.username?.[0]?.toUpperCase()}</div>
+              <div className={styles.headerProfile}>
+                <div className={styles.headerAvatar}>{activeFriend?.username?.[0]?.toUpperCase()}</div>
                 <div>
-                  <div className={styles.username}>{activeFriend?.username}</div>
+                  <div className={styles.headerName}>{activeFriend?.username}</div>
                   {typingUsers.size > 0 && <div className={styles.typingIndicator}>typing...</div>}
                 </div>
               </div>
-              <button className={styles.iconButton} onClick={handleLockChat} title="Lock Chat">
-                🔒
-              </button>
+              
+              <div className={styles.headerTabs}>
+                <div className={`${styles.headerTab} ${styles.active}`}>Conversation</div>
+                <div className={styles.headerTab} onClick={() => alert("Files coming soon!")}>Files</div>
+              </div>
+              
+              <div className={styles.headerActions}>
+                <button title="Audio Call" onClick={() => alert("Audio call coming soon!")}>📞</button>
+                <button title="Video Call" onClick={() => alert("Video call coming soon!")}>📹</button>
+                <button title="Lock Chat" onClick={handleLockChat}>🔒</button>
+              </div>
             </div>
             
             <div className={styles.messagesArea}>
@@ -601,9 +697,13 @@ export default function Dashboard() {
                         <button className={styles.actionBtn} onClick={() => setReplyToMessage(msg)}>↩️</button>
                         <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '👍')}>👍</button>
                         <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '❤️')}>❤️</button>
-                        <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '💖')}>💖</button>
-                        <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '🌟')}>🌟</button>
                         <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '😂')}>😂</button>
+                        {msg.senderId === me?.id && (
+                          <>
+                            <button className={styles.actionBtn} onClick={() => startEditing(msg)}>✏️</button>
+                            <button className={`${styles.actionBtn} ${styles.deleteBtn}`} onClick={() => handleDeleteMessage(msg.id)}>🗑️</button>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -622,19 +722,32 @@ export default function Dashboard() {
                   <button className={styles.closeReply} onClick={() => setReplyToMessage(null)}>✕</button>
                 </div>
               )}
+              {editingMessage && (
+                <div className={styles.replyPreviewBar}>
+                  <div>
+                    <strong>Editing Message</strong>
+                    <div style={{ fontSize: '0.8rem', color: '#667781' }}>{editingMessage.content.substring(0, 100)}</div>
+                  </div>
+                  <button className={styles.closeReply} onClick={() => {
+                    setEditingMessage(null);
+                    setMessageInput('');
+                  }}>✕</button>
+                </div>
+              )}
               
-              <form onSubmit={handleSendMessage} className={styles.inputRow}>
-                <button type="button" className={styles.iconButton} onClick={() => setShowEmojiPicker(!showEmojiPicker)}>
-                  😀
-                </button>
+              <form onSubmit={handleSendMessage} className={styles.inputWrapper}>
+                <button type="button" className={styles.attachmentBtn} onClick={() => alert("Attachments coming soon!")} title="Attach File">📎</button>
                 <input 
                   type="text" 
                   className={styles.messageInput} 
-                  placeholder="Type a message"
+                  placeholder={editingMessage ? "Edit your message..." : "Type a message..."}
                   value={messageInput}
                   onChange={handleInputChange}
                 />
-                <button type="submit" className={styles.sendButton}>➤</button>
+                <button type="button" style={{background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', padding: '0 8px'}} onClick={() => setShowEmojiPicker(!showEmojiPicker)}>😀</button>
+                <button type="submit" className={styles.sendButton} title={editingMessage ? "Save Edit" : "Send Message"}>
+                  {editingMessage ? "✓" : "➤"}
+                </button>
               </form>
               
               {showEmojiPicker && (

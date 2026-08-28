@@ -21,6 +21,7 @@ export default function ChatScreen() {
   const [meId, setMeId] = useState('');
   
   const [replyToMessage, setReplyToMessage] = useState<any>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
@@ -119,6 +120,14 @@ export default function ChatScreen() {
         }));
       });
 
+      socketRef.current.on('message_edited', ({ messageId, content }) => {
+        setMessages(prev => prev.map(m => m.id === messageId ? { ...m, content } : m));
+      });
+
+      socketRef.current.on('message_deleted', ({ messageId }) => {
+        setMessages(prev => prev.filter(m => m.id !== messageId));
+      });
+
       // Fetch existing messages
       fetchMessages(chatToken, token!);
 
@@ -169,6 +178,32 @@ export default function ChatScreen() {
 
   const handleSend = async () => {
     if (!messageInput.trim()) return;
+
+    if (editingMessageId) {
+      const content = messageInput;
+      const msgId = editingMessageId;
+      
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, content } : m));
+      setMessageInput('');
+      setEditingMessageId(null);
+      
+      try {
+        const token = await getSession();
+        await fetch(`${API_URL}/api/chats/${conversationId}/messages/${msgId}`, {
+          method: 'PUT',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+            'x-chat-auth': chatAuthToken 
+          },
+          body: JSON.stringify({ content })
+        });
+      } catch (err) {
+        console.error(err);
+      }
+      return;
+    }
+
     const content = messageInput;
     const replyId = replyToMessage?.id;
     
@@ -239,6 +274,22 @@ export default function ChatScreen() {
     
     setShowEmojiPicker(false);
     setSelectedMessageId(null);
+  };
+
+  const handleDelete = async (msgId: string) => {
+    setMessages(prev => prev.filter(m => m.id !== msgId));
+    try {
+      const token = await getSession();
+      await fetch(`${API_URL}/api/chats/${conversationId}/messages/${msgId}`, {
+        method: 'DELETE',
+        headers: { 
+          'Authorization': `Bearer ${token}`,
+          'x-chat-auth': chatAuthToken 
+        }
+      });
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   if (!unlocked) {
@@ -337,10 +388,21 @@ export default function ChatScreen() {
             </TouchableOpacity>
           </View>
         )}
+        {editingMessageId && (
+          <View style={styles.replyPreview}>
+            <Text style={styles.replyPreviewText} numberOfLines={1}>Editing Message</Text>
+            <TouchableOpacity onPress={() => { setEditingMessageId(null); setMessageInput(''); }}>
+              <Text style={{color: '#e32b2b', fontWeight: 'bold'}}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        )}
         <View style={styles.inputArea}>
+          <TouchableOpacity style={{ padding: 8 }} onPress={() => alert("Attachments coming soon!")}>
+            <Text style={{ fontSize: 20 }}>📎</Text>
+          </TouchableOpacity>
           <TextInput
             style={styles.messageInput}
-            placeholder="Type a message..."
+            placeholder={editingMessageId ? "Edit your message..." : "Type a message..."}
             placeholderTextColor="#94a3b8"
             value={messageInput}
             onChangeText={setMessageInput}
@@ -354,7 +416,7 @@ export default function ChatScreen() {
       <Modal visible={showEmojiPicker} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowEmojiPicker(false)}>
           <View style={styles.emojiCard}>
-            <Text style={styles.modalTitle}>Reaction & Reply</Text>
+            <Text style={styles.modalTitle}>Message Actions</Text>
             <TouchableOpacity style={styles.replyActionBtn} onPress={() => {
               const msg = messages.find(m => m.id === selectedMessageId);
               setReplyToMessage(msg);
@@ -362,8 +424,29 @@ export default function ChatScreen() {
             }}>
               <Text style={styles.replyActionText}>↩️ Reply to this message</Text>
             </TouchableOpacity>
+
+            {messages.find(m => m.id === selectedMessageId)?.senderId === meId && (
+              <>
+                <TouchableOpacity style={styles.replyActionBtn} onPress={() => {
+                  const msg = messages.find(m => m.id === selectedMessageId);
+                  setEditingMessageId(msg.id);
+                  setMessageInput(msg.content);
+                  setShowEmojiPicker(false);
+                }}>
+                  <Text style={styles.replyActionText}>✏️ Edit message</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={[styles.replyActionBtn, { backgroundColor: '#fee2e2' }]} onPress={() => {
+                  if (selectedMessageId) handleDelete(selectedMessageId);
+                  setShowEmojiPicker(false);
+                }}>
+                  <Text style={[styles.replyActionText, { color: '#ef4444' }]}>🗑️ Delete message</Text>
+                </TouchableOpacity>
+              </>
+            )}
             
-            <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false}>
+            <Text style={[styles.modalTitle, { marginTop: 16 }]}>React</Text>
+            <ScrollView style={{ maxHeight: 200 }} showsVerticalScrollIndicator={false}>
               <View style={styles.emojiGrid}>
                 {EMOJIS.map(emoji => (
                   <TouchableOpacity key={emoji} onPress={() => handleReact(emoji)} style={styles.emojiBtn}>
