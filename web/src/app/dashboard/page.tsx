@@ -135,8 +135,8 @@ export default function Dashboard() {
         return [...prev, payload];
       });
       // Mark as read if active
-      if (activeChatId && msg.conversationId === activeChatId && msg.senderId !== me?.id) {
-        socketRef.current?.emit('mark_read', { conversationId: activeChatId, messageIds: [msg.id] });
+      if (activeChatId && payload.conversationId === activeChatId && payload.senderId !== me?.id) {
+        socketRef.current?.emit('mark_read', { conversationId: activeChatId, messageIds: [payload.id] });
       }
     });
 
