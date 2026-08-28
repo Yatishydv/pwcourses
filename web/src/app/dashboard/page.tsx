@@ -72,6 +72,10 @@ export default function Dashboard() {
   const [isTyping, setIsTyping] = useState(false);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
+  const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
+  const [hasNewMessage, setHasNewMessage] = useState(false);
+  const isNearBottomRef = useRef(true);
+  
   const [showFriendsModal, setShowFriendsModal] = useState(false);
   const [searchUsername, setSearchUsername] = useState('');
   const [friendReqMsg, setFriendReqMsg] = useState('');
@@ -188,8 +192,25 @@ export default function Dashboard() {
   }, [activeChatId, chatAuthTokens]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (isNearBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    } else {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg && lastMsg.senderId === me?.id) {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        isNearBottomRef.current = true;
+      } else if (lastMsg && lastMsg.senderId !== me?.id) {
+        setHasNewMessage(true);
+      }
+    }
+  }, [messages, typingUsers]);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLDivElement;
+    const nearBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 100;
+    isNearBottomRef.current = nearBottom;
+    if (nearBottom && hasNewMessage) setHasNewMessage(false);
+  };
 
   const fetchMe = async () => {
     try {
@@ -308,6 +329,8 @@ export default function Dashboard() {
     setMessages([]);
     setReplyToMessage(null);
     setTypingUsers(new Set());
+    isNearBottomRef.current = true;
+    setHasNewMessage(false);
     
     if (chatAuthTokens[convId]) {
       fetchMessages(convId, chatAuthTokens[convId]);
@@ -335,7 +358,7 @@ export default function Dashboard() {
       setChatAuthTokens(prev => ({ ...prev, [activeChatId]: token }));
       
       socketRef.current?.emit('join_chat', { conversationId: activeChatId, chatAuthToken: token });
-      await fetchMessages(activeChatId, token);
+      fetchMessages(activeChatId, token); // Do not await to speed up UI transition
     } catch (err: any) {
       setChatError(err.message);
     }
@@ -360,6 +383,28 @@ export default function Dashboard() {
     });
     setActiveChatId(null);
     setMessages([]);
+  };
+
+  const handleClearHistory = async () => {
+    if (!activeChatId) return;
+    const confirm = window.confirm("Are you sure you want to clear this chat history? The contact will remain.");
+    if (!confirm) return;
+
+    const token = chatAuthTokens[activeChatId];
+    if (!token) return;
+
+    // Optimistic delete
+    setMessages([]);
+    
+    try {
+      await fetch(`/api/chats/${activeChatId}/history`, {
+        method: 'DELETE',
+        headers: { 'x-chat-auth': token },
+        credentials: 'include'
+      });
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const fetchMessages = async (convId: string, token: string) => {
@@ -629,7 +674,6 @@ export default function Dashboard() {
                 <div className={styles.headerAvatar}>{activeFriend?.username?.[0]?.toUpperCase()}</div>
                 <div>
                   <div className={styles.headerName}>{activeFriend?.username}</div>
-                  {typingUsers.size > 0 && <div className={styles.typingIndicator}>typing...</div>}
                 </div>
               </div>
               
@@ -641,25 +685,32 @@ export default function Dashboard() {
               <div className={styles.headerActions}>
                 <button title="Audio Call" onClick={() => alert("Audio call coming soon!")}>📞</button>
                 <button title="Video Call" onClick={() => alert("Video call coming soon!")}>📹</button>
+                <button title="Clear Chat History" onClick={handleClearHistory}>🗑️</button>
                 <button title="Lock Chat" onClick={handleLockChat}>🔒</button>
               </div>
             </div>
             
-            <div className={styles.messagesArea}>
+            <div className={styles.messagesArea} onScroll={handleScroll}>
               {messages.map((msg, i) => {
                 const prevMsg = messages[i - 1];
                 const showDate = !prevMsg || new Date(msg.createdAt).toDateString() !== new Date(prevMsg.createdAt).toDateString();
+                const isHovered = hoveredMessageId === msg.id;
 
                 return (
-                  <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+                  <div 
+                    key={msg.id} 
+                    style={{ display: 'flex', flexDirection: 'column', width: '100%' }}
+                  >
                     {showDate && renderDateSeparator(msg.createdAt)}
                     
-                    <div className={`${styles.messageWrapper} ${msg.senderId === me?.id ? styles.sent : styles.received}`}>
+                    <div 
+                      className={`${styles.messageWrapper} ${msg.senderId === me?.id ? styles.sent : styles.received} ${isHovered ? styles.forceHover : ''}`}
+                      onMouseEnter={() => setHoveredMessageId(msg.id)}
+                      onMouseLeave={() => setHoveredMessageId(null)}
+                    >
                       <div className={styles.messageBubble}>
                         {msg.replyTo && (
-                          <div className={styles.messageReplyBox} onClick={() => {
-                            // scroll to reply... left as a simple visual element
-                          }}>
+                          <div className={styles.messageReplyBox} onClick={() => {}}>
                             <strong>{msg.replyTo.senderId === me?.id ? 'You' : activeFriend?.username}</strong>
                             <div>{msg.replyTo.content.substring(0, 50)}...</div>
                           </div>
@@ -697,6 +748,8 @@ export default function Dashboard() {
                         <button className={styles.actionBtn} onClick={() => setReplyToMessage(msg)}>↩️</button>
                         <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '👍')}>👍</button>
                         <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '❤️')}>❤️</button>
+                        <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '❤️‍🔥')}>❤️‍🔥</button>
+                        <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '💖')}>💖</button>
                         <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '😂')}>😂</button>
                         {msg.senderId === me?.id && (
                           <>
@@ -709,7 +762,27 @@ export default function Dashboard() {
                   </div>
                 );
               })}
+              
+              {typingUsers.size > 0 && (
+                <div className={`${styles.messageWrapper} ${styles.received}`}>
+                  <div className={styles.messageBubble} style={{ minWidth: '60px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+                    <div className={styles.typingIndicator}><span></span><span></span><span></span></div>
+                  </div>
+                </div>
+              )}
               <div ref={messagesEndRef} />
+              
+              {hasNewMessage && (
+                <div 
+                  className={styles.newMessageBadge} 
+                  onClick={() => {
+                    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+                    setHasNewMessage(false);
+                  }}
+                >
+                  New Message ↓
+                </div>
+              )}
             </div>
             
             <div className={styles.inputContainer}>

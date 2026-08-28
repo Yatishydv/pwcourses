@@ -171,3 +171,52 @@ export const lockConversation = async (req: Request, res: Response): Promise<voi
     res.status(500).json({ error: 'Internal server error' });
   }
 };
+
+export const clearChatHistory = async (req: Request, res: Response): Promise<void> => {
+  // @ts-ignore
+  const userId = req.userId;
+  const { id: conversationId } = req.params;
+  
+  // Need to ensure the user is part of the conversation
+  try {
+    const conversation: any = await prisma.conversation.findUnique({
+      where: { id: conversationId as string },
+      include: { members: true }
+    });
+
+    if (!conversation) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+
+    const isMember = conversation.members.some((m: any) => m.userId === userId);
+    if (!isMember) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
+    // Delete all reactions associated with the messages in this conversation
+    const messages = await prisma.message.findMany({
+      where: { conversationId: conversationId as string },
+      select: { id: true }
+    });
+    
+    const messageIds = messages.map(m => m.id);
+    
+    if (messageIds.length > 0) {
+      await prisma.reaction.deleteMany({
+        where: { messageId: { in: messageIds } }
+      });
+
+      // Delete all messages in the conversation
+      await prisma.message.deleteMany({
+        where: { conversationId: conversationId as string }
+      });
+    }
+
+    res.status(200).json({ success: true, message: 'Chat history cleared' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};

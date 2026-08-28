@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getMessages, sendMessage } from '../controllers/messageController';
+import { getMessages, sendMessage, editMessage, deleteMessage } from '../controllers/messageController';
 import { requireAuth } from '../middleware/authMiddleware';
 import { requireChatAuth } from '../middleware/chatAuthMiddleware';
 
@@ -13,5 +13,7 @@ router.use(requireChatAuth);
 
 router.get('/', getMessages);
 router.post('/', sendMessage);
+router.put('/:messageId', editMessage);
+router.delete('/:messageId', deleteMessage);
 
 export default router;

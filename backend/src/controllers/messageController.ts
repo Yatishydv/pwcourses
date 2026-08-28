@@ -101,3 +101,63 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
     res.status(500).json({ error: 'Internal server error' });
   }
 };
+
+export const editMessage = async (req: Request, res: Response): Promise<void> => {
+  const { conversationId, messageId } = req.params;
+  const { content } = req.body;
+  const userId = req.userId!;
+
+  try {
+    const existing = await prisma.message.findUnique({ where: { id: messageId } });
+    if (!existing) {
+      res.status(404).json({ error: 'Message not found' });
+      return;
+    }
+    if (existing.senderId !== userId) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+
+    const message = await prisma.message.update({
+      where: { id: messageId },
+      data: { content },
+      include: {
+        replyTo: true,
+        reactions: true
+      }
+    });
+
+    getIo().to(`chat_${conversationId}`).emit('message_edited', { messageId, content: message.content, conversationId });
+    res.json({ message });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const deleteMessage = async (req: Request, res: Response): Promise<void> => {
+  const { conversationId, messageId } = req.params;
+  const userId = req.userId!;
+
+  try {
+    const existing = await prisma.message.findUnique({ where: { id: messageId } });
+    if (!existing) {
+      res.status(404).json({ error: 'Message not found' });
+      return;
+    }
+    if (existing.senderId !== userId) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+
+    // Delete reactions first (if any cascading issues, but schema usually handles it)
+    await prisma.reaction.deleteMany({ where: { messageId } });
+    await prisma.message.delete({ where: { id: messageId } });
+
+    getIo().to(`chat_${conversationId}`).emit('message_deleted', { messageId, conversationId });
+    res.json({ success: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
