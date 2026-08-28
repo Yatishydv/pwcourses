@@ -23,8 +23,15 @@ export default function ChatScreen() {
   const [replyToMessage, setReplyToMessage] = useState<any>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const flatListRef = useRef<FlatList>(null);
 
-  const EMOJIS = ['😀','😂','😍','😭','😎','👍','❤️','🔥','🎉','💯'];
+  const EMOJIS = [
+    '😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚',
+    '👋','🤚','🖐','✋','🖖','👌','🤌','🤏','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','👍','👎',
+    '❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','❤️‍🔥','💯',
+    '🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐻‍❄️','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🙈','🙉','🙊','🐒',
+    '🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓','🫐','🍈','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🥑','🍆','🌶️'
+  ];
 
   const socketRef = useRef<Socket | null>(null);
 
@@ -75,6 +82,8 @@ export default function ChatScreen() {
       socketRef.current.emit('join_chat', { conversationId, chatAuthToken: chatToken });
       socketRef.current.on('new_message', (msg) => {
         setMessages(prev => {
+          // Prevent duplicate if we sent it (optimistic UI already handles it)
+          if (msg.senderId === meId) return prev;
           if (prev.find(m => m.id === msg.id)) return prev;
           return [...prev, msg];
         });
@@ -276,6 +285,9 @@ export default function ChatScreen() {
       </View>
 
       <FlatList
+        ref={flatListRef}
+        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+        onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
         data={messages}
         keyExtractor={item => item.id}
         renderItem={({ item }) => {
@@ -351,13 +363,15 @@ export default function ChatScreen() {
               <Text style={styles.replyActionText}>↩️ Reply to this message</Text>
             </TouchableOpacity>
             
-            <View style={styles.emojiGrid}>
-              {EMOJIS.map(emoji => (
-                <TouchableOpacity key={emoji} onPress={() => handleReact(emoji)} style={styles.emojiBtn}>
-                  <Text style={{ fontSize: 24 }}>{emoji}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false}>
+              <View style={styles.emojiGrid}>
+                {EMOJIS.map(emoji => (
+                  <TouchableOpacity key={emoji} onPress={() => handleReact(emoji)} style={styles.emojiBtn}>
+                    <Text style={{ fontSize: 24 }}>{emoji}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </ScrollView>
           </View>
         </TouchableOpacity>
       </Modal>
