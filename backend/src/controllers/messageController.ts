@@ -66,7 +66,7 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
           messageId: message.id
         });
 
-        // Send Expo Push Notification
+        // Send Expo Push Notification (Fire and forget, do not await so it doesn't block the API response)
         if (receiver.expoPushToken) {
           const { Expo } = require('expo-server-sdk');
           const expo = new Expo();
@@ -75,17 +75,21 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
             const sender = conv.members.find((m: any) => m.userId === userId)?.user;
             const senderName = sender ? sender.username : 'Someone';
             
-            try {
-              await expo.sendPushNotificationsAsync([{
-                to: receiver.expoPushToken,
-                sound: 'default',
-                title: `New message from ${senderName}`,
-                body: message.content,
-                data: { conversationId, messageId: message.id },
-              }]);
-            } catch (err) {
-              console.error('Push notification failed:', err);
-            }
+            // Run in background
+            Promise.resolve().then(async () => {
+              try {
+                await expo.sendPushNotificationsAsync([{
+                  to: receiver.expoPushToken,
+                  sound: 'default',
+                  title: `New message from ${senderName}`,
+                  body: message.content,
+                  data: { conversationId, messageId: message.id },
+                }]);
+                console.log(`Sent push notification to ${receiver.expoPushToken}`);
+              } catch (err) {
+                console.error('Push notification failed:', err);
+              }
+            });
           }
         }
       }
