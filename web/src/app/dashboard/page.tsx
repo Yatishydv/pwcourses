@@ -23,6 +23,7 @@ interface Reaction {
 
 interface Message {
   id: string;
+  conversationId: string;
   content: string;
   senderId: string;
   createdAt: string;
