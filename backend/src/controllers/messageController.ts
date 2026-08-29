@@ -10,13 +10,15 @@ export const getMessages = async (req: Request, res: Response): Promise<void> =>
   try {
     const messages = await prisma.message.findMany({
       where: { conversationId: conversationId as string },
-      orderBy: { createdAt: 'asc' },
-      take: 100, // pagination could be implemented here
+      orderBy: { createdAt: 'desc' },
+      take: 500, // Fetch the latest 500 messages
       include: {
         reactions: true,
         replyTo: true
       }
     });
+
+    messages.reverse();
 
     res.status(200).json({ messages });
   } catch (error) {
