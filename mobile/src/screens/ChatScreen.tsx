@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, KeyboardAvoidingView, Platform, Modal, ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, KeyboardAvoidingView, Platform, Modal, ScrollView, useColorScheme } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { getSession } from '../utils/auth';
 import { API_URL } from '../utils/constants';
@@ -10,6 +10,9 @@ export default function ChatScreen() {
   const navigation = useNavigation();
   // @ts-ignore
   const { conversationId, friendName } = route.params;
+  const colorScheme = useColorScheme();
+  const isDark = colorScheme === 'dark';
+  const styles = getStyles(isDark);
 
   const [unlocked, setUnlocked] = useState(false);
   const [chatPin, setChatPin] = useState('');
@@ -443,11 +446,17 @@ export default function ChatScreen() {
               )}
               <View style={[styles.messageBubble, isMe ? styles.sentBubble : styles.receivedBubble]}>
                 <Text style={isMe ? styles.sentText : styles.receivedText}>{item.content}</Text>
-                {isMe && (
-                  <Text style={[styles.readReceipt, item.read ? styles.readColor : styles.unreadColor]}>
-                    {item.read ? '✓✓' : '✓'}
+                
+                <View style={styles.messageMeta}>
+                  <Text style={[styles.messageTime, isMe ? styles.messageTimeSent : null]}>
+                    {new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </Text>
-                )}
+                  {isMe && (
+                    <Text style={[styles.readReceipt, item.read ? styles.readColor : styles.unreadColor]}>
+                      {item.read ? '✓✓' : '✓'}
+                    </Text>
+                  )}
+                </View>
               </View>
               {rx.length > 0 && (
                 <View style={[styles.reactionsRow, isMe ? { alignSelf: 'flex-end' } : { alignSelf: 'flex-start' }]}>
@@ -566,57 +575,72 @@ export default function ChatScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8fafc', justifyContent: 'center', padding: 16 },
-  chatContainer: { flex: 1, backgroundColor: '#ffffff' },
-  lockCard: { backgroundColor: '#ffffff', padding: 32, borderRadius: 24, alignItems: 'center', elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.1, shadowRadius: 20 },
-  title: { fontSize: 20, fontWeight: '700', color: '#1e293b' },
-  subtitle: { color: '#64748b', marginBottom: 24, textAlign: 'center', marginTop: 8 },
-  input: { width: '100%', backgroundColor: '#f8fafc', color: '#0f172a', padding: 16, borderRadius: 12, marginBottom: 16, borderWidth: 1, borderColor: '#e2e8f0', fontSize: 24, fontWeight: 'bold' },
-  button: { width: '100%', backgroundColor: '#3b82f6', padding: 16, borderRadius: 12, alignItems: 'center', elevation: 2, shadowColor: '#3b82f6', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
-  buttonText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
-  error: { color: '#ef4444', marginBottom: 12, fontWeight: '500' },
-  
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#f1f5f9', backgroundColor: '#ffffff', paddingTop: Platform.OS === 'ios' ? 48 : 16 },
-  messageWrapper: { maxWidth: '75%' },
-  sent: { alignSelf: 'flex-end' },
-  received: { alignSelf: 'flex-start' },
-  messageBubble: { padding: 14, borderRadius: 20 },
-  sentBubble: { backgroundColor: '#3b82f6', borderBottomRightRadius: 4 },
-  receivedBubble: { backgroundColor: '#f1f5f9', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#e2e8f0' },
-  sentText: { color: '#ffffff', fontSize: 15, lineHeight: 22 },
-  receivedText: { color: '#0f172a', fontSize: 15, lineHeight: 22 },
-  
-  inputAreaWrapper: { backgroundColor: '#ffffff', borderTopWidth: 1, borderTopColor: '#f1f5f9' },
-  inputArea: { flexDirection: 'row', padding: 12, paddingBottom: Platform.OS === 'ios' ? 24 : 12, alignItems: 'flex-end', gap: 12 },
-  messageInput: { flex: 1, backgroundColor: '#f1f5f9', color: '#0f172a', paddingHorizontal: 20, paddingTop: 14, paddingBottom: 14, borderRadius: 24, fontSize: 15, maxHeight: 120 },
-  sendButton: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center', elevation: 2, shadowColor: '#3b82f6', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
-  
-  reactionsRow: { flexDirection: 'row', backgroundColor: '#ffffff', borderRadius: 20, paddingHorizontal: 8, paddingVertical: 4, marginTop: -12, elevation: 2, shadowColor: '#000', shadowOffset: {width:0,height:2}, shadowOpacity: 0.1, shadowRadius: 4, zIndex: 10, borderWidth: 1, borderColor: '#e2e8f0' },
-  reactionEmoji: { fontSize: 14, marginHorizontal: 2 },
-  
-  repliedMessage: { backgroundColor: 'rgba(0,0,0,0.05)', padding: 10, borderRadius: 12, marginBottom: 6 },
-  repliedText: { fontSize: 13, color: '#64748b', fontStyle: 'italic' },
-  
-  replyPreview: { flexDirection: 'row', justifyContent: 'space-between', padding: 12, backgroundColor: '#f8fafc', borderTopWidth: 1, borderTopColor: '#e2e8f0', alignItems: 'center' },
-  replyPreviewText: { color: '#64748b', flex: 1, marginRight: 8, fontSize: 14, fontStyle: 'italic' },
-  
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  emojiCard: { backgroundColor: '#ffffff', padding: 24, borderRadius: 24, width: '85%', maxHeight: '80%', elevation: 10, shadowColor: '#000', shadowOffset: {width:0,height:10}, shadowOpacity: 0.2, shadowRadius: 20 },
-  modalTitle: { fontSize: 16, fontWeight: '700', marginBottom: 16, textAlign: 'center', color: '#64748b', textTransform: 'uppercase', letterSpacing: 1 },
-  replyActionBtn: { backgroundColor: '#f8fafc', padding: 16, borderRadius: 16, marginBottom: 12, alignItems: 'center' },
-  replyActionText: { fontWeight: '600', color: '#334155', fontSize: 16 },
-  emojiGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12 },
-  emojiBtn: { padding: 10, backgroundColor: '#f8fafc', borderRadius: 20 },
-  readReceipt: { fontSize: 10, alignSelf: 'flex-end', marginTop: 4, letterSpacing: -1 },
-  readColor: { color: '#93c5fd' },
-  unreadColor: { color: 'rgba(255,255,255,0.6)' },
+const getStyles = (isDark: boolean) => {
+  const bgMain = isDark ? '#0b141a' : '#f8fafc';
+  const bgChat = isDark ? '#0b141a' : '#ffffff';
+  const bgCard = isDark ? '#1f2c34' : '#ffffff';
+  const textPrimary = isDark ? '#f3f4f6' : '#1e293b';
+  const textSecondary = isDark ? '#9ca3af' : '#64748b';
+  const borderCol = isDark ? '#374151' : '#e2e8f0';
+  const inputBg = isDark ? '#2a3942' : '#f1f5f9';
+  const bubbleRecv = isDark ? '#1f2c34' : '#f1f5f9';
+  const textRecv = isDark ? '#f3f4f6' : '#0f172a';
 
-  typingIndicatorWrapper: { flexDirection: 'row', alignItems: 'center', padding: 12, paddingHorizontal: 16, backgroundColor: '#ffffff' },
-  typingText: { fontSize: 13, color: '#94a3b8', marginRight: 8, fontStyle: 'italic' },
-  bouncingDots: { flexDirection: 'row', gap: 2, paddingTop: 4 },
-  dot: { color: '#cbd5e1', fontSize: 10 },
-  
-  newMessageBadge: { position: 'absolute', bottom: 90, alignSelf: 'center', backgroundColor: '#3b82f6', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, elevation: 4, shadowColor: '#3b82f6', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4, zIndex: 100 },
-  newMessageText: { color: 'white', fontWeight: 'bold', fontSize: 13 }
-});
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: bgMain, justifyContent: 'center', padding: 16 },
+    chatContainer: { flex: 1, backgroundColor: bgChat },
+    lockCard: { backgroundColor: bgCard, padding: 32, borderRadius: 24, alignItems: 'center', elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.1, shadowRadius: 20 },
+    title: { fontSize: 20, fontWeight: '700', color: textPrimary },
+    subtitle: { color: textSecondary, marginBottom: 24, textAlign: 'center', marginTop: 8 },
+    input: { width: '100%', backgroundColor: inputBg, color: textPrimary, padding: 16, borderRadius: 12, marginBottom: 16, borderWidth: 1, borderColor: borderCol, fontSize: 24, fontWeight: 'bold' },
+    button: { width: '100%', backgroundColor: '#3b82f6', padding: 16, borderRadius: 12, alignItems: 'center', elevation: 2, shadowColor: '#3b82f6', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
+    buttonText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
+    error: { color: '#ef4444', marginBottom: 12, fontWeight: '500' },
+    
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: borderCol, backgroundColor: bgCard, paddingTop: Platform.OS === 'ios' ? 48 : 16 },
+    messageWrapper: { maxWidth: '75%' },
+    sent: { alignSelf: 'flex-end' },
+    received: { alignSelf: 'flex-start' },
+    messageBubble: { padding: 12, borderRadius: 20, paddingHorizontal: 16 },
+    sentBubble: { backgroundColor: '#3b82f6', borderBottomRightRadius: 4 },
+    receivedBubble: { backgroundColor: bubbleRecv, borderBottomLeftRadius: 4, borderWidth: 1, borderColor: borderCol },
+    sentText: { color: '#ffffff', fontSize: 15, lineHeight: 22 },
+    receivedText: { color: textRecv, fontSize: 15, lineHeight: 22 },
+    
+    inputAreaWrapper: { backgroundColor: bgCard, borderTopWidth: 1, borderTopColor: borderCol },
+    inputArea: { flexDirection: 'row', padding: 12, paddingBottom: Platform.OS === 'ios' ? 24 : 12, alignItems: 'flex-end', gap: 12 },
+    messageInput: { flex: 1, backgroundColor: inputBg, color: textPrimary, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 14, borderRadius: 24, fontSize: 15, maxHeight: 120 },
+    sendButton: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center', elevation: 2, shadowColor: '#3b82f6', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
+    
+    reactionsRow: { flexDirection: 'row', backgroundColor: bgCard, borderRadius: 20, paddingHorizontal: 8, paddingVertical: 4, marginTop: -12, elevation: 2, shadowColor: '#000', shadowOffset: {width:0,height:2}, shadowOpacity: 0.1, shadowRadius: 4, zIndex: 10, borderWidth: 1, borderColor: borderCol },
+    reactionEmoji: { fontSize: 14, marginHorizontal: 2 },
+    
+    repliedMessage: { backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', padding: 10, borderRadius: 8, marginBottom: 6, borderLeftWidth: 3, borderLeftColor: '#3b82f6' },
+    repliedText: { fontSize: 13, color: textSecondary, fontStyle: 'italic' },
+    
+    replyPreview: { flexDirection: 'row', justifyContent: 'space-between', padding: 12, backgroundColor: inputBg, borderTopWidth: 1, borderTopColor: borderCol, borderLeftWidth: 4, borderLeftColor: '#3b82f6', alignItems: 'center' },
+    replyPreviewText: { color: textSecondary, flex: 1, marginRight: 8, fontSize: 14, fontStyle: 'italic' },
+    
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+    emojiCard: { backgroundColor: bgCard, padding: 24, borderRadius: 24, width: '85%', maxHeight: '80%', elevation: 10, shadowColor: '#000', shadowOffset: {width:0,height:10}, shadowOpacity: 0.2, shadowRadius: 20 },
+    modalTitle: { fontSize: 16, fontWeight: '700', marginBottom: 16, textAlign: 'center', color: textSecondary, textTransform: 'uppercase', letterSpacing: 1 },
+    replyActionBtn: { backgroundColor: inputBg, padding: 16, borderRadius: 16, marginBottom: 12, alignItems: 'center' },
+    replyActionText: { fontWeight: '600', color: textPrimary, fontSize: 16 },
+    emojiGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12 },
+    emojiBtn: { padding: 10, backgroundColor: inputBg, borderRadius: 20 },
+    
+    typingIndicatorWrapper: { flexDirection: 'row', alignItems: 'center', padding: 12, paddingHorizontal: 16, backgroundColor: bgChat },
+    typingText: { fontSize: 13, color: textSecondary, marginRight: 8, fontStyle: 'italic' },
+    bouncingDots: { flexDirection: 'row', gap: 2, paddingTop: 4 },
+    dot: { color: textSecondary, fontSize: 10 },
+    
+    newMessageBadge: { position: 'absolute', bottom: 90, alignSelf: 'center', backgroundColor: '#3b82f6', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, elevation: 4, shadowColor: '#3b82f6', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4, zIndex: 100 },
+    newMessageText: { color: 'white', fontWeight: 'bold', fontSize: 13 },
+
+    messageMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginTop: 4 },
+    messageTime: { fontSize: 11, color: isDark ? '#9ca3af' : 'rgba(0,0,0,0.45)' },
+    messageTimeSent: { color: 'rgba(255,255,255,0.7)' },
+    readReceipt: { fontSize: 11, color: 'rgba(255,255,255,0.7)' },
+    readColor: { color: '#ffffff' }
+  });
+};
