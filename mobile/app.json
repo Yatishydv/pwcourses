@@ -19,7 +19,7 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.anonymous.mobile",
       "googleServicesFile": "./google-services.json",
-      "softwareKeyboardLayoutMode": "pan"
+      "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
       "favicon": "./assets/favicon.png"

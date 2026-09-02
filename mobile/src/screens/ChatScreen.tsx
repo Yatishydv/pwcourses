@@ -413,8 +413,8 @@ export default function ChatScreen() {
   return (
     <KeyboardAvoidingView 
       style={styles.chatContainer} 
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 25}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 8 }}>
