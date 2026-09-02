@@ -1,17 +1,17 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, KeyboardAvoidingView, Platform, Modal, ScrollView, useColorScheme } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, KeyboardAvoidingView, Platform, Modal, ScrollView } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { getSession } from '../utils/auth';
 import { API_URL } from '../utils/constants';
 import io, { Socket } from 'socket.io-client';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function ChatScreen() {
   const route = useRoute();
   const navigation = useNavigation();
   // @ts-ignore
   const { conversationId, friendName } = route.params;
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const [isDark, setIsDark] = useState(false);
   const styles = getStyles(isDark);
 
   const [unlocked, setUnlocked] = useState(false);
@@ -48,10 +48,21 @@ export default function ChatScreen() {
 
   useEffect(() => {
     fetchMe();
+    // Load saved theme
+    AsyncStorage.getItem('chatTheme').then(val => {
+      if (val === 'dark') setIsDark(true);
+      else if (val === 'light') setIsDark(false);
+    });
     return () => {
       handleLock();
     };
   }, []);
+
+  const toggleTheme = async () => {
+    const newVal = !isDark;
+    setIsDark(newVal);
+    await AsyncStorage.setItem('chatTheme', newVal ? 'dark' : 'light');
+  };
 
   const fetchMe = async () => {
     const token = await getSession();
@@ -407,12 +418,17 @@ export default function ChatScreen() {
     >
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 8 }}>
-          <Text style={{ color: '#000000' }}>◀ Back</Text>
+          <Text style={{ color: isDark ? '#f3f4f6' : '#1e293b', fontSize: 16 }}>◀ Back</Text>
         </TouchableOpacity>
         <Text style={styles.title}>{friendName}</Text>
-        <TouchableOpacity onPress={handleLock} style={{ padding: 8 }}>
-          <Text style={{ color: '#666666' }}>🔒 Lock</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity onPress={toggleTheme} style={{ padding: 8 }}>
+            <Text style={{ fontSize: 18 }}>{isDark ? '☀️' : '🌙'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleLock} style={{ padding: 8 }}>
+            <Text style={{ fontSize: 16 }}>🔒</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <FlatList
@@ -427,11 +443,35 @@ export default function ChatScreen() {
         onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
         data={messages}
         keyExtractor={item => item.id}
-        renderItem={({ item }) => {
+        renderItem={({ item, index }) => {
           const isMe = item.senderId === meId;
           const rx = item.reactions || [];
+          
+          // Date separator logic
+          const prevItem = index > 0 ? messages[index - 1] : null;
+          const currentDate = new Date(item.createdAt).toDateString();
+          const prevDate = prevItem ? new Date(prevItem.createdAt).toDateString() : null;
+          const showDateSep = !prevDate || currentDate !== prevDate;
+          
+          let dateLabel = '';
+          if (showDateSep) {
+            const msgDate = new Date(item.createdAt);
+            const today = new Date();
+            const yesterday = new Date(today);
+            yesterday.setDate(yesterday.getDate() - 1);
+            if (msgDate.toDateString() === today.toDateString()) dateLabel = 'TODAY';
+            else if (msgDate.toDateString() === yesterday.toDateString()) dateLabel = 'YESTERDAY';
+            else dateLabel = msgDate.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }).toUpperCase();
+          }
+          
           return (
-            <TouchableOpacity 
+            <View>
+              {showDateSep && (
+                <View style={styles.dateSeparator}>
+                  <Text style={styles.dateSeparatorText}>{dateLabel}</Text>
+                </View>
+              )}
+              <TouchableOpacity 
               onLongPress={() => {
                 setSelectedMessageId(item.id);
                 setShowEmojiPicker(true);
@@ -465,7 +505,8 @@ export default function ChatScreen() {
                   ))}
                 </View>
               )}
-            </TouchableOpacity>
+              </TouchableOpacity>
+            </View>
           );
         }}
         contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: 32 }}
@@ -641,6 +682,10 @@ const getStyles = (isDark: boolean) => {
     messageTime: { fontSize: 11, color: isDark ? '#9ca3af' : 'rgba(0,0,0,0.45)' },
     messageTimeSent: { color: 'rgba(255,255,255,0.7)' },
     readReceipt: { fontSize: 11, color: 'rgba(255,255,255,0.7)' },
-    readColor: { color: '#ffffff' }
+    readColor: { color: '#ffffff' },
+    unreadColor: { color: 'rgba(255,255,255,0.6)' },
+
+    dateSeparator: { alignSelf: 'center', marginVertical: 16, paddingHorizontal: 16, paddingVertical: 6, backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)', borderRadius: 20 },
+    dateSeparatorText: { fontSize: 11, fontWeight: '600', color: textSecondary, letterSpacing: 0.5, textTransform: 'uppercase' }
   });
 };

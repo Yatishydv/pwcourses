@@ -1,13 +1,16 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Modal, TextInput } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Modal, TextInput, useColorScheme } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { getSession, clearSession } from '../utils/auth';
 import { API_URL } from '../utils/constants';
 import * as Notifications from 'expo-notifications';
 import io, { Socket } from 'socket.io-client';
-import { useRef } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function DashboardScreen() {
+  const colorScheme = useColorScheme();
+  const [isDark, setIsDark] = useState(colorScheme === 'dark');
+  const styles = getStyles(isDark);
   const [conversations, setConversations] = useState([]);
   const [me, setMe] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -28,10 +31,22 @@ export default function DashboardScreen() {
 
   useEffect(() => {
     loadData();
+    // Load theme
+    AsyncStorage.getItem('dashboardTheme').then(val => {
+      if (val === 'dark') setIsDark(true);
+      else if (val === 'light') setIsDark(false);
+    });
+
     return () => {
       if (socketRef.current) socketRef.current.disconnect();
     };
   }, []);
+
+  const toggleTheme = async () => {
+    const newVal = !isDark;
+    setIsDark(newVal);
+    await AsyncStorage.setItem('dashboardTheme', newVal ? 'dark' : 'light');
+  };
 
   const requestPermissions = async (token: string) => {
     const { status } = await Notifications.requestPermissionsAsync();
@@ -263,12 +278,15 @@ export default function DashboardScreen() {
           <View style={styles.avatar}><Text style={styles.avatarText}>{me?.username?.[0]?.toUpperCase()}</Text></View>
           <Text style={styles.username}>{me?.username}</Text>
         </View>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
+        <View style={{ flexDirection: 'row', gap: 4, alignItems: 'center' }}>
+          <TouchableOpacity onPress={toggleTheme} style={styles.lockBtn}>
+            <Text style={styles.lockText}>{isDark ? '☀️' : '🌙'}</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={openBatchmatesModal} style={styles.lockBtn}>
-            <Text style={styles.lockText}>👥 Batchmates</Text>
+            <Text style={styles.lockText}>👥</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={handleLogout} style={styles.lockBtn}>
-            <Text style={styles.lockText}>🔒 Lock</Text>
+            <Text style={styles.lockText}>🔒</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -367,37 +385,47 @@ export default function DashboardScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#ffffff' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#ffffff' },
-  header: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    padding: 16, 
-    borderBottomWidth: 1, 
-    borderBottomColor: '#f1f5f9' 
-  },
-  profile: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#e32b2b', justifyContent: 'center', alignItems: 'center' },
-  avatarText: { color: 'white', fontWeight: 'bold', fontSize: 18 },
-  username: { color: '#000000', fontSize: 16, fontWeight: 'bold' },
-  lockBtn: { padding: 8, backgroundColor: '#f1f5f9', borderRadius: 8 },
-  lockText: { color: '#666666' },
-  chatItem: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  chatInfo: { flex: 1 },
-  chatName: { color: '#000000', fontSize: 16, fontWeight: 'bold' },
-  chatPreview: { color: '#666666', fontSize: 14, marginTop: 4 },
-  emptyText: { color: '#666666', textAlign: 'center', marginTop: 32 },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 16 },
-  modalContent: { backgroundColor: '#f1f5f9', borderRadius: 24, padding: 24 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  modalTitle: { color: '#000000', fontSize: 18, fontWeight: 'bold' },
-  closeBtn: { color: '#666666', fontSize: 24 },
-  input: { backgroundColor: '#ffffff', color: '#000000', padding: 16, borderRadius: 12, marginBottom: 16, borderWidth: 1, borderColor: '#cccccc' },
-  actionBtn: { backgroundColor: '#e32b2b', padding: 16, borderRadius: 12, alignItems: 'center' },
-  actionBtnText: { color: 'white', fontWeight: 'bold' },
-  msgText: { color: '#e32b2b', marginTop: 8, textAlign: 'center' },
-  reqItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#ffffff', padding: 12, borderRadius: 12, marginTop: 8 },
-  acceptBtn: { backgroundColor: '#10b981', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8 }
-});
+const getStyles = (isDark: boolean) => {
+  const bgMain = isDark ? '#0b141a' : '#ffffff';
+  const textPrimary = isDark ? '#f3f4f6' : '#000000';
+  const textSecondary = isDark ? '#9ca3af' : '#666666';
+  const borderCol = isDark ? '#374151' : '#f1f5f9';
+  const btnBg = isDark ? '#1f2c34' : '#f1f5f9';
+  const modalBg = isDark ? '#1f2c34' : '#f1f5f9';
+  const modalOverlay = 'rgba(0,0,0,0.7)';
+
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: bgMain },
+    center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: bgMain },
+    header: { 
+      flexDirection: 'row', 
+      justifyContent: 'space-between', 
+      alignItems: 'center', 
+      padding: 16, 
+      borderBottomWidth: 1, 
+      borderBottomColor: borderCol 
+    },
+    profile: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center' },
+    avatarText: { color: 'white', fontWeight: 'bold', fontSize: 18 },
+    username: { color: textPrimary, fontSize: 16, fontWeight: 'bold' },
+    lockBtn: { padding: 8, backgroundColor: btnBg, borderRadius: 8 },
+    lockText: { color: textPrimary, fontSize: 16 },
+    chatItem: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: borderCol },
+    chatInfo: { flex: 1 },
+    chatName: { color: textPrimary, fontSize: 16, fontWeight: 'bold' },
+    chatPreview: { color: textSecondary, fontSize: 14, marginTop: 4 },
+    emptyText: { color: textSecondary, textAlign: 'center', marginTop: 32 },
+    modalOverlay: { flex: 1, backgroundColor: modalOverlay, justifyContent: 'center', padding: 16 },
+    modalContent: { backgroundColor: modalBg, borderRadius: 24, padding: 24 },
+    modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+    modalTitle: { color: textPrimary, fontSize: 18, fontWeight: 'bold' },
+    closeBtn: { color: textSecondary, fontSize: 24 },
+    input: { backgroundColor: isDark ? '#2a3942' : '#ffffff', color: textPrimary, padding: 16, borderRadius: 12, marginBottom: 16, borderWidth: 1, borderColor: borderCol },
+    actionBtn: { backgroundColor: '#3b82f6', padding: 16, borderRadius: 12, alignItems: 'center' },
+    actionBtnText: { color: 'white', fontWeight: 'bold' },
+    msgText: { color: '#ef4444', marginTop: 8, textAlign: 'center' },
+    reqItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: isDark ? '#2a3942' : '#ffffff', padding: 12, borderRadius: 12, marginTop: 8 },
+    acceptBtn: { backgroundColor: '#10b981', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8 }
+  });
+};
