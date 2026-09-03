@@ -85,6 +85,7 @@ model Message {
   content        String
   replyToId      String?  @db.ObjectId
   read           Boolean  @default(false)
+  readAt         DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   deletedAt      DateTime?

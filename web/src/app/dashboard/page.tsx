@@ -28,6 +28,7 @@ interface Message {
   senderId: string;
   createdAt: string;
   read: boolean;
+  readAt?: string;
   replyToId?: string;
   replyTo?: Message;
   reactions?: Reaction[];
@@ -176,10 +177,10 @@ export default function Dashboard() {
       }));
     });
 
-    socketRef.current.on('messages_read', ({ messageIds }) => {
+    socketRef.current.on('messages_read', ({ messageIds, readAt }) => {
       setMessages(prev => prev.map(m => {
         if (messageIds.includes(m.id)) {
-          return { ...m, read: true };
+          return { ...m, read: true, readAt: readAt || new Date().toISOString() };
         }
         return m;
       }));
@@ -754,7 +755,10 @@ export default function Dashboard() {
                             {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </span>
                           {msg.senderId === me?.id && (
-                            <span className={`${styles.readReceipt} ${msg.read ? styles.read : ''}`}>
+                            <span 
+                              className={`${styles.readReceipt} ${msg.read ? styles.read : ''}`}
+                              title={msg.read && msg.readAt ? `Seen at ${new Date(msg.readAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${new Date(msg.readAt).toLocaleDateString()}` : 'Sent'}
+                            >
                               {msg.read ? '✓✓' : '✓'}
                             </span>
                           )}

@@ -196,10 +196,10 @@ export default function ChatScreen() {
         }));
       });
 
-      socketRef.current.on('messages_read', ({ messageIds }) => {
+      socketRef.current.on('messages_read', ({ messageIds, readAt }: any) => {
         setMessages(prev => prev.map(m => {
           if (messageIds.includes(m.id)) {
-            return { ...m, read: true };
+            return { ...m, read: true, readAt: readAt || new Date().toISOString() };
           }
           return m;
         }));
@@ -519,9 +519,19 @@ export default function ChatScreen() {
                     {new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </Text>
                   {isMe && (
-                    <Text style={[styles.readReceipt, item.read ? styles.readColor : styles.unreadColor]}>
-                      {item.read ? '✓✓' : '✓'}
-                    </Text>
+                    <TouchableOpacity 
+                      onPress={() => {
+                        if (item.read && item.readAt) {
+                          const seenDate = new Date(item.readAt);
+                          alert(`Seen at ${seenDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${seenDate.toLocaleDateString()}`);
+                        }
+                      }}
+                      activeOpacity={item.read ? 0.6 : 1}
+                    >
+                      <Text style={[styles.readReceipt, item.read ? styles.readColor : styles.unreadColor]}>
+                        {item.read ? '✓✓' : '✓'}
+                      </Text>
+                    </TouchableOpacity>
                   )}
                 </View>
               </View>

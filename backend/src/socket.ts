@@ -114,11 +114,12 @@ export const initSocket = (httpServer: HttpServer) => {
 
     socket.on('mark_read', async ({ conversationId, messageIds }) => {
       try {
+        const readAt = new Date();
         await prisma.message.updateMany({
           where: { id: { in: messageIds }, conversationId, senderId: { not: userId } },
-          data: { read: true }
+          data: { read: true, readAt }
         });
-        socket.to(`chat_${conversationId}`).emit('messages_read', { conversationId, messageIds, readBy: userId });
+        socket.to(`chat_${conversationId}`).emit('messages_read', { conversationId, messageIds, readBy: userId, readAt: readAt.toISOString() });
       } catch (e) {
         console.error('Mark read error:', e);
       }
