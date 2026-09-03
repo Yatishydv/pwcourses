@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, KeyboardAvoidingView, Platform, Modal, ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, Platform, Modal, ScrollView, Keyboard, Animated } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { getSession } from '../utils/auth';
 import { API_URL } from '../utils/constants';
@@ -35,6 +35,7 @@ export default function ChatScreen() {
   const [hasNewMessages, setHasNewMessages] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const keyboardHeight = useRef(new Animated.Value(0)).current;
 
   const EMOJIS = [
     '😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚',
@@ -55,6 +56,36 @@ export default function ChatScreen() {
     });
     return () => {
       handleLock();
+    };
+  }, []);
+
+  // Keyboard listener for Android
+  useEffect(() => {
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => {
+        Animated.timing(keyboardHeight, {
+          toValue: e.endCoordinates.height,
+          duration: Platform.OS === 'ios' ? 250 : 100,
+          useNativeDriver: false,
+        }).start();
+        // Auto scroll to bottom when keyboard opens
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 150);
+      }
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => {
+        Animated.timing(keyboardHeight, {
+          toValue: 0,
+          duration: Platform.OS === 'ios' ? 250 : 100,
+          useNativeDriver: false,
+        }).start();
+      }
+    );
+    return () => {
+      showSub.remove();
+      hideSub.remove();
     };
   }, []);
 
@@ -411,11 +442,7 @@ export default function ChatScreen() {
   }
 
   return (
-    <KeyboardAvoidingView 
-      style={styles.chatContainer} 
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
-    >
+    <View style={styles.chatContainer}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 8 }}>
           <Text style={{ color: isDark ? '#f3f4f6' : '#1e293b', fontSize: 16 }}>◀ Back</Text>
@@ -566,6 +593,8 @@ export default function ChatScreen() {
         </View>
       </View>
 
+      <Animated.View style={{ height: keyboardHeight }} />
+
       <Modal visible={showEmojiPicker} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowEmojiPicker(false)}>
           <View style={styles.emojiCard}>
@@ -612,7 +641,7 @@ export default function ChatScreen() {
         </TouchableOpacity>
       </Modal>
 
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
