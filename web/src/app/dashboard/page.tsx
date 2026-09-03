@@ -76,6 +76,7 @@ export default function Dashboard() {
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
+  const [seenMessageId, setSeenMessageId] = useState<string | null>(null);
   const [hasNewMessage, setHasNewMessage] = useState(false);
   const isNearBottomRef = useRef(true);
   
@@ -757,9 +758,15 @@ export default function Dashboard() {
                           {msg.senderId === me?.id && (
                             <span 
                               className={`${styles.readReceipt} ${msg.read ? styles.read : ''}`}
-                              title={msg.read && msg.readAt ? `Seen at ${new Date(msg.readAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${new Date(msg.readAt).toLocaleDateString()}` : 'Sent'}
+                              onClick={() => msg.read && msg.readAt ? setSeenMessageId(seenMessageId === msg.id ? null : msg.id) : null}
+                              style={{ cursor: msg.read ? 'pointer' : 'default' }}
                             >
                               {msg.read ? '✓✓' : '✓'}
+                            </span>
+                          )}
+                          {seenMessageId === msg.id && msg.readAt && (
+                            <span className={styles.seenAtText}>
+                              Seen {new Date(msg.readAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {new Date(msg.readAt).toLocaleDateString()}
                             </span>
                           )}
                         </div>
