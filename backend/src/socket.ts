@@ -189,12 +189,12 @@ export const initSocket = (httpServer: HttpServer) => {
       try {
         const conversation = await prisma.conversation.findUnique({
           where: { id: conversationId },
-          include: { participants: true }
+          include: { members: true }
         });
         if (conversation) {
-          const peer = conversation.participants.find(p => p.id !== userId);
+          const peer = conversation.members.find((m: any) => m.userId !== userId);
           if (peer) {
-            socket.to(peer.id).emit(event, payload);
+            socket.to(peer.userId).emit(event, payload);
           }
         }
       } catch (err) {
