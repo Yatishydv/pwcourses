@@ -26,6 +26,7 @@ export default function DashboardScreen() {
   // Create Chat state
   const [newChatFriendId, setNewChatFriendId] = useState<string | null>(null);
   const [newChatPin, setNewChatPin] = useState('');
+  const [searchConvFilter, setSearchConvFilter] = useState('');
 
   const socketRef = useRef<Socket | null>(null);
 
@@ -291,8 +292,19 @@ export default function DashboardScreen() {
         </View>
       </View>
 
+      <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+        <TextInput
+          style={[styles.input, { marginBottom: 8, padding: 12 }]}
+          placeholder="Search conversations..."
+          placeholderTextColor="#94a3b8"
+          value={searchConvFilter}
+          onChangeText={setSearchConvFilter}
+          autoCapitalize="none"
+        />
+      </View>
+
       <FlatList
-        data={conversations}
+        data={searchConvFilter ? conversations.filter((c: any) => c.members[0]?.user?.username?.toLowerCase().includes(searchConvFilter.toLowerCase())) : conversations}
         keyExtractor={(item: any) => item.id}
         renderItem={({ item }) => {
           const friend = item.members[0]?.user;

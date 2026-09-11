@@ -32,6 +32,20 @@ interface Message {
   replyToId?: string;
   replyTo?: Message;
   reactions?: Reaction[];
+  fileName?: string;
+  fileUrl?: string;
+  fileType?: string;
+  fileSize?: number;
+}
+
+interface SharedFile {
+  id: string;
+  fileName: string;
+  fileUrl: string;
+  fileType: string;
+  fileSize: number;
+  senderId: string;
+  createdAt: string;
 }
 
 interface FriendRequest {
@@ -52,6 +66,12 @@ const EMOJI_CATEGORIES: Record<string, string[]> = {
   '🚗 Travel': ['🚗','🚕','🚙','🚌','🚎','🏎️','🚓','🚑','🚒','🚐','🛻','🚚','🚛','🚜','🏍️','🛵','🚲','🛴','🛺','🚁','✈️','🛩️','🚀','🛸','🚢','⛵','🛥️','🚂','🚇','🚆','🚊','🚉','🏠','🏡','🏢','🏬','🏣','🏤','🏥','🏦','🏨','🏪','🏫','🏩','💒','🏛️','⛪','🕌','🕍','🛕'],
   '💡 Objects': ['⌚','📱','💻','⌨️','🖥️','🖨️','🖱️','🖲️','🕹️','🗜️','💽','💾','💿','📀','📼','📷','📸','📹','🎥','📽️','🎞️','📞','☎️','📟','📠','📺','📻','🎙️','🎚️','🎛️','🧭','⏱️','⏲️','⏰','🕰️','⌛','📡','🔋','🔌','💡','🔦','🕯️','🧯','🛢️','💸','💵','💴','💶','💷'],
 };
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
 
 export default function Dashboard() {
   const router = useRouter();
@@ -87,6 +107,26 @@ export default function Dashboard() {
   const [friends, setFriends] = useState<User[]>([]);
   const [newChatFriendId, setNewChatFriendId] = useState<string | null>(null);
   const [newChatPin, setNewChatPin] = useState('');
+  const [searchFilter, setSearchFilter] = useState('');
+  
+  // File attachments
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  
+  // Files tab
+  const [activeTab, setActiveTab] = useState<'conversation' | 'files'>('conversation');
+  const [sharedFiles, setSharedFiles] = useState<SharedFile[]>([]);
+  
+  // Call state
+  const [callState, setCallState] = useState<'idle' | 'calling' | 'incoming' | 'active'>('idle');
+  const [callType, setCallType] = useState<'audio' | 'video'>('audio');
+  const [callDuration, setCallDuration] = useState(0);
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const callTimerRef = useRef<NodeJS.Timeout | null>(null);
   
   const socketRef = useRef<Socket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -120,10 +160,7 @@ export default function Dashboard() {
 
     socketRef.current.on('new_message', (payload: any) => {
       setMessages((prev) => {
-        // 1. If we already have the real message, return
         if (prev.find(m => m.id === payload.id)) return prev;
-        
-        // 2. If it's our own optimistic message coming back, replace it
         if (payload.clientMsgId) {
           const tempIdx = prev.findIndex(m => m.id === payload.clientMsgId);
           if (tempIdx !== -1) {
@@ -132,23 +169,20 @@ export default function Dashboard() {
             return next;
           }
         }
-        
-        // 3. Otherwise append
         return [...prev, payload];
       });
-      // Mark as read if active
       if (activeChatId && payload.conversationId === activeChatId && payload.senderId !== me?.id) {
         socketRef.current?.emit('mark_read', { conversationId: activeChatId, messageIds: [payload.id] });
       }
     });
 
-    socketRef.current.on('typing_start', ({ userId, conversationId }) => {
+    socketRef.current.on('typing_start', ({ userId, conversationId }: any) => {
       if (conversationId === activeChatId) {
         setTypingUsers(prev => new Set(prev).add(userId));
       }
     });
 
-    socketRef.current.on('typing_stop', ({ userId, conversationId }) => {
+    socketRef.current.on('typing_stop', ({ userId, conversationId }: any) => {
       if (conversationId === activeChatId) {
         setTypingUsers(prev => {
           const next = new Set(prev);
@@ -158,7 +192,7 @@ export default function Dashboard() {
       }
     });
 
-    socketRef.current.on('reaction_added', ({ messageId, reaction }) => {
+    socketRef.current.on('reaction_added', ({ messageId, reaction }: any) => {
       setMessages(prev => prev.map(m => {
         if (m.id === messageId) {
           const reactions = m.reactions || [];
@@ -168,7 +202,7 @@ export default function Dashboard() {
       }));
     });
 
-    socketRef.current.on('reaction_removed', ({ messageId, userId, emoji }) => {
+    socketRef.current.on('reaction_removed', ({ messageId, userId, emoji }: any) => {
       setMessages(prev => prev.map(m => {
         if (m.id === messageId) {
           const reactions = m.reactions || [];
@@ -178,7 +212,7 @@ export default function Dashboard() {
       }));
     });
 
-    socketRef.current.on('messages_read', ({ messageIds, readAt }) => {
+    socketRef.current.on('messages_read', ({ messageIds, readAt }: any) => {
       setMessages(prev => prev.map(m => {
         if (messageIds.includes(m.id)) {
           return { ...m, read: true, readAt: readAt || new Date().toISOString() };
@@ -187,12 +221,54 @@ export default function Dashboard() {
       }));
     });
 
-    socketRef.current.on('message_edited', ({ messageId, content }) => {
+    socketRef.current.on('message_edited', ({ messageId, content }: any) => {
       setMessages(prev => prev.map(m => m.id === messageId ? { ...m, content } : m));
     });
 
-    socketRef.current.on('message_deleted', ({ messageId }) => {
+    socketRef.current.on('message_deleted', ({ messageId }: any) => {
       setMessages(prev => prev.filter(m => m.id !== messageId));
+    });
+
+    // Auto-deletion: server permanently deleted messages after 48h
+    socketRef.current.on('messages_auto_deleted', ({ messageIds }: any) => {
+      setMessages(prev => prev.filter(m => !messageIds.includes(m.id)));
+    });
+
+    // WebRTC Call signaling
+    socketRef.current.on('call_offer', async ({ conversationId, offer, callType: ct, callerId }: any) => {
+      if (conversationId === activeChatId) {
+        setCallState('incoming');
+        setCallType(ct);
+        // Store the offer for when user accepts
+        peerConnectionRef.current = createPeerConnection();
+        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(offer));
+      }
+    });
+
+    socketRef.current.on('call_answer', async ({ answer }: any) => {
+      if (peerConnectionRef.current) {
+        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+        setCallState('active');
+        startCallTimer();
+      }
+    });
+
+    socketRef.current.on('ice_candidate', async ({ candidate }: any) => {
+      if (peerConnectionRef.current && candidate) {
+        try {
+          await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.error('Error adding ICE candidate:', e);
+        }
+      }
+    });
+
+    socketRef.current.on('call_end', () => {
+      endCall(false);
+    });
+
+    socketRef.current.on('call_reject', () => {
+      endCall(false);
     });
 
     return () => {
@@ -202,7 +278,6 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!activeChatId || !chatAuthTokens[activeChatId]) return;
-    // Initial fetch only, NO POLLING (polling overwrites state and resurrects deleted messages)
     fetchMessages(activeChatId, chatAuthTokens[activeChatId]);
   }, [activeChatId, chatAuthTokens]);
 
@@ -219,6 +294,183 @@ export default function Dashboard() {
       }
     }
   }, [messages, typingUsers]);
+
+  // === WebRTC Helpers ===
+  const createPeerConnection = (): RTCPeerConnection => {
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    });
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate && activeChatId) {
+        socketRef.current?.emit('ice_candidate', {
+          conversationId: activeChatId,
+          candidate: event.candidate
+        });
+      }
+    };
+
+    pc.ontrack = (event) => {
+      remoteStreamRef.current = event.streams[0];
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = event.streams[0];
+      }
+    };
+
+    return pc;
+  };
+
+  const startCall = async (type: 'audio' | 'video') => {
+    if (!activeChatId) return;
+    try {
+      setCallType(type);
+      setCallState('calling');
+
+      const constraints: MediaStreamConstraints = {
+        audio: true,
+        video: type === 'video'
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      localStreamRef.current = stream;
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+
+      const pc = createPeerConnection();
+      peerConnectionRef.current = pc;
+
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      socketRef.current?.emit('call_offer', {
+        conversationId: activeChatId,
+        offer,
+        callType: type
+      });
+    } catch (err) {
+      console.error('Failed to start call:', err);
+      setCallState('idle');
+    }
+  };
+
+  const acceptCall = async () => {
+    if (!peerConnectionRef.current || !activeChatId) return;
+    try {
+      const constraints: MediaStreamConstraints = {
+        audio: true,
+        video: callType === 'video'
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      localStreamRef.current = stream;
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+
+      stream.getTracks().forEach(track => peerConnectionRef.current!.addTrack(track, stream));
+
+      const answer = await peerConnectionRef.current.createAnswer();
+      await peerConnectionRef.current.setLocalDescription(answer);
+
+      socketRef.current?.emit('call_answer', {
+        conversationId: activeChatId,
+        answer
+      });
+
+      setCallState('active');
+      startCallTimer();
+    } catch (err) {
+      console.error('Failed to accept call:', err);
+      rejectCall();
+    }
+  };
+
+  const rejectCall = () => {
+    if (activeChatId) {
+      socketRef.current?.emit('call_reject', { conversationId: activeChatId });
+    }
+    endCall(false);
+  };
+
+  const endCall = (notify = true) => {
+    if (notify && activeChatId) {
+      socketRef.current?.emit('call_end', { conversationId: activeChatId });
+    }
+    localStreamRef.current?.getTracks().forEach(t => t.stop());
+    peerConnectionRef.current?.close();
+    peerConnectionRef.current = null;
+    localStreamRef.current = null;
+    remoteStreamRef.current = null;
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    if (callTimerRef.current) clearInterval(callTimerRef.current);
+    setCallState('idle');
+    setCallDuration(0);
+  };
+
+  const startCallTimer = () => {
+    setCallDuration(0);
+    callTimerRef.current = setInterval(() => {
+      setCallDuration(prev => prev + 1);
+    }, 1000);
+  };
+
+  const formatCallDuration = (secs: number) => {
+    const m = Math.floor(secs / 60).toString().padStart(2, '0');
+    const s = (secs % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
+
+  // === File Upload ===
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeChatId) return;
+
+    const token = chatAuthTokens[activeChatId];
+    if (!token) return;
+
+    setIsUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await fetch(`/api/chats/${activeChatId}/messages/upload`, {
+        method: 'POST',
+        headers: { 'x-chat-auth': token },
+        credentials: 'include',
+        body: formData
+      });
+
+      if (!res.ok) {
+        console.error('File upload failed');
+      }
+    } catch (err) {
+      console.error('Upload error:', err);
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  // === Fetch Files ===
+  const fetchSharedFiles = async () => {
+    if (!activeChatId) return;
+    const token = chatAuthTokens[activeChatId];
+    if (!token) return;
+
+    const res = await fetch(`/api/chats/${activeChatId}/messages/files`, {
+      headers: { 'x-chat-auth': token },
+      credentials: 'include'
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setSharedFiles(data.files);
+    }
+  };
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const target = e.target as HTMLDivElement;
@@ -316,7 +568,6 @@ export default function Dashboard() {
         setNewChatPin('');
         setShowFriendsModal(false);
         await fetchConversations();
-        // Auto-select the new chat
         if (data.conversationId) {
           setActiveChatId(data.conversationId);
           setChatPinInput('');
@@ -346,6 +597,7 @@ export default function Dashboard() {
     setTypingUsers(new Set());
     isNearBottomRef.current = true;
     setHasNewMessage(false);
+    setActiveTab('conversation');
     
     if (chatAuthTokens[convId]) {
       fetchMessages(convId, chatAuthTokens[convId]);
@@ -360,8 +612,6 @@ export default function Dashboard() {
     if (!activeChatId) return;
 
     setIsUnlocking(true);
-    console.time('frontend-unlock-total');
-    console.time('frontend-unlock-fetch');
     try {
       const res = await fetch(`/api/chats/${activeChatId}/unlock`, {
         method: 'POST',
@@ -369,19 +619,15 @@ export default function Dashboard() {
         credentials: 'include',
         body: JSON.stringify({ chatPin: chatPinInput })
       });
-      console.timeEnd('frontend-unlock-fetch');
 
       if (!res.ok) throw new Error('Invalid Chat PIN');
       const data = await res.json();
       
-      console.time('frontend-unlock-state');
       const token = data.chatAuthToken;
       setChatAuthTokens(prev => ({ ...prev, [activeChatId]: token }));
-      console.timeEnd('frontend-unlock-state');
       
       socketRef.current?.emit('join_chat', { conversationId: activeChatId, chatAuthToken: token });
-      fetchMessages(activeChatId, token); // Do not await to speed up UI transition
-      console.timeEnd('frontend-unlock-total');
+      fetchMessages(activeChatId, token);
     } catch (err: any) {
       setChatError(err.message);
     } finally {
@@ -418,7 +664,6 @@ export default function Dashboard() {
     const token = chatAuthTokens[activeChatId];
     if (!token) return;
 
-    // Optimistic delete
     setMessages([]);
     
     try {
@@ -441,7 +686,6 @@ export default function Dashboard() {
       const data = await res.json();
       setMessages(data.messages);
       
-      // Mark unread messages as read
       const unreadIds = data.messages
         .filter((m: Message) => !m.read && m.senderId !== me?.id)
         .map((m: Message) => m.id);
@@ -467,7 +711,6 @@ export default function Dashboard() {
     if (!token) return;
 
     if (editingMessage) {
-      // Edit message logic
       const content = messageInput;
       const messageId = editingMessage.id;
       
@@ -496,7 +739,6 @@ export default function Dashboard() {
     const content = messageInput;
     const replyId = replyToMessage?.id;
     
-    // Optimistic UI update
     const tempId = `temp-${Date.now()}`;
     const tempMessage: Message = {
       id: tempId,
@@ -561,7 +803,6 @@ export default function Dashboard() {
     const token = chatAuthTokens[activeChatId];
     if (!token) return;
 
-    // Optimistic delete
     setMessages(prev => prev.filter(m => m.id !== messageId));
     
     try {
@@ -584,7 +825,6 @@ export default function Dashboard() {
   const handleReaction = (messageId: string, emoji: string) => {
     if (!activeChatId || !me) return;
 
-    // Optimistic UI update for instant feedback
     setMessages(prev => prev.map(m => {
       if (m.id === messageId) {
         const reactions = m.reactions || [];
@@ -617,9 +857,53 @@ export default function Dashboard() {
     return <div className={styles.dateSeparator}>{display}</div>;
   };
 
+  const renderFileContent = (msg: Message) => {
+    if (!msg.fileUrl) return null;
+    const url = msg.fileUrl;
+    const type = msg.fileType || '';
+    const name = msg.fileName || 'File';
+    const size = msg.fileSize ? formatFileSize(msg.fileSize) : '';
+
+    if (type.startsWith('image/')) {
+      return (
+        <div style={{ marginBottom: 6 }}>
+          <img src={url} alt={name} style={{ maxWidth: '100%', maxHeight: 300, borderRadius: 8, cursor: 'pointer' }} onClick={() => window.open(url, '_blank')} />
+        </div>
+      );
+    }
+    if (type.startsWith('video/')) {
+      return (
+        <div style={{ marginBottom: 6 }}>
+          <video src={url} controls style={{ maxWidth: '100%', maxHeight: 300, borderRadius: 8 }} />
+        </div>
+      );
+    }
+    if (type.startsWith('audio/')) {
+      return (
+        <div style={{ marginBottom: 6 }}>
+          <audio src={url} controls style={{ width: '100%' }} />
+        </div>
+      );
+    }
+    // Generic file
+    return (
+      <a href={url} download={name} target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'rgba(0,0,0,0.1)', borderRadius: 8, textDecoration: 'none', color: 'inherit', marginBottom: 6 }}>
+        <span style={{ fontSize: '1.5rem' }}>📄</span>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{name}</div>
+          {size && <div style={{ fontSize: '0.7rem', opacity: 0.7 }}>{size}</div>}
+        </div>
+      </a>
+    );
+  };
+
   const activeConv = conversations.find(c => c.id === activeChatId);
   const activeFriend = activeConv?.members[0]?.user;
   const isChatUnlocked = activeChatId && chatAuthTokens[activeChatId];
+
+  const filteredConversations = searchFilter
+    ? conversations.filter(c => c.members[0]?.user?.username?.toLowerCase().includes(searchFilter.toLowerCase()))
+    : conversations;
 
   return (
     <div className={styles.dashboardContainer}>
@@ -639,14 +923,18 @@ export default function Dashboard() {
         </div>
         
         <div className={styles.searchContainer}>
-          <input type="text" className={styles.searchInput} placeholder="Search" />
+          <input 
+            type="text" 
+            className={styles.searchInput} 
+            placeholder="Search conversations..." 
+            value={searchFilter}
+            onChange={e => setSearchFilter(e.target.value)}
+          />
         </div>
         
         <div className={styles.chatList}>
-          {conversations.map(conv => {
+          {filteredConversations.map(conv => {
             const friend = conv.members[0]?.user;
-            
-            // Calculate unread
             const isUnlocked = chatAuthTokens[conv.id];
             
             return (
@@ -711,189 +999,282 @@ export default function Dashboard() {
               </div>
               
               <div className={styles.headerTabs}>
-                <div className={`${styles.headerTab} ${styles.active}`}>Conversation</div>
-                <div className={styles.headerTab} onClick={() => alert("Files coming soon!")}>Files</div>
+                <div 
+                  className={`${styles.headerTab} ${activeTab === 'conversation' ? styles.active : ''}`}
+                  onClick={() => setActiveTab('conversation')}
+                >Conversation</div>
+                <div 
+                  className={`${styles.headerTab} ${activeTab === 'files' ? styles.active : ''}`}
+                  onClick={() => { setActiveTab('files'); fetchSharedFiles(); }}
+                >Files</div>
               </div>
               
               <div className={styles.headerActions}>
-                <button title="Audio Call" onClick={() => alert("Audio call coming soon!")}>📞</button>
-                <button title="Video Call" onClick={() => alert("Video call coming soon!")}>📹</button>
+                <button title="Audio Call" onClick={() => startCall('audio')}>📞</button>
+                <button title="Video Call" onClick={() => startCall('video')}>📹</button>
                 <button title="Clear Chat History" onClick={handleClearHistory}>🗑️</button>
                 <button title="Lock Chat" onClick={handleLockChat}>🔒</button>
               </div>
             </div>
-            
-            <div className={styles.messagesArea} onScroll={handleScroll}>
-              {messages.map((msg, i) => {
-                const prevMsg = messages[i - 1];
-                const showDate = !prevMsg || new Date(msg.createdAt).toDateString() !== new Date(prevMsg.createdAt).toDateString();
-                const isHovered = hoveredMessageId === msg.id;
 
-                return (
-                  <div 
-                    key={msg.id} 
-                    style={{ display: 'flex', flexDirection: 'column', width: '100%' }}
-                  >
-                    {showDate && renderDateSeparator(msg.createdAt)}
-                    
-                    <div 
-                      className={`${styles.messageWrapper} ${msg.senderId === me?.id ? styles.sent : styles.received} ${isHovered ? styles.forceHover : ''}`}
-                      onMouseEnter={() => setHoveredMessageId(msg.id)}
-                      onMouseLeave={() => setHoveredMessageId(null)}
-                    >
-                      <div className={styles.messageBubble}>
-                        {msg.replyTo && (
-                          <div className={styles.messageReplyBox} onClick={() => {}}>
-                            <strong>{msg.replyTo.senderId === me?.id ? 'You' : activeFriend?.username}</strong>
-                            <div>{msg.replyTo.content.substring(0, 50)}...</div>
+            {/* Call UI Overlay */}
+            {callState !== 'idle' && (
+              <div style={{
+                position: 'absolute', inset: 0, zIndex: 50,
+                background: 'rgba(0,0,0,0.9)',
+                display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center',
+                color: 'white', gap: 20
+              }}>
+                {callType === 'video' && (
+                  <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+                    <video ref={remoteVideoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <video ref={localVideoRef} autoPlay playsInline muted style={{ position: 'absolute', bottom: 20, right: 20, width: 150, height: 112, borderRadius: 12, objectFit: 'cover', border: '2px solid white' }} />
+                  </div>
+                )}
+                {callType === 'audio' && (
+                  <>
+                    <div style={{ fontSize: '4rem' }}>📞</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 600 }}>{activeFriend?.username}</div>
+                    <audio ref={remoteVideoRef as any} autoPlay />
+                  </>
+                )}
+                
+                {callState === 'calling' && <div style={{ fontSize: '1rem', opacity: 0.7 }}>Calling...</div>}
+                {callState === 'incoming' && <div style={{ fontSize: '1rem', opacity: 0.7 }}>Incoming {callType} call...</div>}
+                {callState === 'active' && <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{formatCallDuration(callDuration)}</div>}
+
+                <div style={{ display: 'flex', gap: 16 }}>
+                  {callState === 'incoming' && (
+                    <button onClick={acceptCall} style={{ background: '#10b981', color: 'white', border: 'none', padding: '16px 32px', borderRadius: 999, fontSize: '1.2rem', cursor: 'pointer' }}>
+                      ✓ Accept
+                    </button>
+                  )}
+                  <button onClick={() => endCall(true)} style={{ background: '#ef4444', color: 'white', border: 'none', padding: '16px 32px', borderRadius: 999, fontSize: '1.2rem', cursor: 'pointer' }}>
+                    ✕ End
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'files' ? (
+              <div className={styles.messagesArea}>
+                {sharedFiles.length === 0 ? (
+                  <div className={styles.emptyState}>
+                    <div style={{ fontSize: '3rem', opacity: 0.5 }}>📁</div>
+                    <p>No files shared yet</p>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {sharedFiles.map(f => (
+                      <a key={f.id} href={f.fileUrl} download={f.fileName} target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, background: 'var(--bg-secondary)', borderRadius: 12, textDecoration: 'none', color: 'var(--text-primary)' }}>
+                        <span style={{ fontSize: '1.5rem' }}>
+                          {f.fileType?.startsWith('image/') ? '🖼️' : f.fileType?.startsWith('video/') ? '🎬' : f.fileType?.startsWith('audio/') ? '🎵' : '📄'}
+                        </span>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{f.fileName}</div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                            {formatFileSize(f.fileSize)} · {new Date(f.createdAt).toLocaleDateString()}
                           </div>
-                        )}
+                        </div>
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className={styles.messagesArea} onScroll={handleScroll}>
+                  {messages.map((msg, i) => {
+                    const prevMsg = messages[i - 1];
+                    const showDate = !prevMsg || new Date(msg.createdAt).toDateString() !== new Date(prevMsg.createdAt).toDateString();
+                    const isHovered = hoveredMessageId === msg.id;
+
+                    return (
+                      <div 
+                        key={msg.id} 
+                        style={{ display: 'flex', flexDirection: 'column', width: '100%' }}
+                      >
+                        {showDate && renderDateSeparator(msg.createdAt)}
                         
-                        <div className={styles.messageContent}>{msg.content}</div>
-                        
-                        <div className={styles.messageMeta}>
-                          <span className={styles.messageTime}>
-                            {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                          {msg.senderId === me?.id && (
-                            <span 
-                              className={`${styles.readReceipt} ${msg.read ? styles.read : ''}`}
-                              onClick={() => msg.read && msg.readAt ? setSeenMessageId(seenMessageId === msg.id ? null : msg.id) : null}
-                              style={{ cursor: msg.read ? 'pointer' : 'default' }}
-                            >
-                              {msg.read ? '✓✓' : '✓'}
-                            </span>
+                        <div 
+                          className={`${styles.messageWrapper} ${msg.senderId === me?.id ? styles.sent : styles.received} ${isHovered ? styles.forceHover : ''}`}
+                          onMouseEnter={() => setHoveredMessageId(msg.id)}
+                          onMouseLeave={() => setHoveredMessageId(null)}
+                        >
+                          <div className={styles.messageBubble}>
+                            {msg.replyTo && (
+                              <div className={styles.messageReplyBox} onClick={() => {}}>
+                                <strong>{msg.replyTo.senderId === me?.id ? 'You' : activeFriend?.username}</strong>
+                                <div>{msg.replyTo.content.substring(0, 50)}...</div>
+                              </div>
+                            )}
+
+                            {renderFileContent(msg)}
+                            
+                            {(!msg.fileUrl || msg.content !== `📎 ${msg.fileName}`) && (
+                              <div className={styles.messageContent}>{msg.content}</div>
+                            )}
+                            
+                            <div className={styles.messageMeta}>
+                              <span className={styles.messageTime}>
+                                {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                              {msg.senderId === me?.id && (
+                                <span 
+                                  className={`${styles.readReceipt} ${msg.read ? styles.read : ''}`}
+                                  onClick={() => msg.read && msg.readAt ? setSeenMessageId(seenMessageId === msg.id ? null : msg.id) : null}
+                                  style={{ cursor: msg.read ? 'pointer' : 'default' }}
+                                >
+                                  {msg.read ? '✓✓' : '✓'}
+                                </span>
+                              )}
+                              {seenMessageId === msg.id && msg.readAt && (
+                                <span className={styles.seenAtText}>
+                                  Seen {new Date(msg.readAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {new Date(msg.readAt).toLocaleDateString()}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {msg.reactions && msg.reactions.length > 0 && (
+                            <div className={styles.reactionsContainer}>
+                              {Array.from(new Set(msg.reactions.map(r => r.emoji))).map(emoji => (
+                                <span 
+                                  key={emoji} 
+                                  onClick={() => handleReaction(msg.id, emoji)}
+                                  style={{ cursor: 'pointer' }}
+                                >
+                                  {emoji}
+                                </span>
+                              ))}
+                            </div>
                           )}
-                          {seenMessageId === msg.id && msg.readAt && (
-                            <span className={styles.seenAtText}>
-                              Seen {new Date(msg.readAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {new Date(msg.readAt).toLocaleDateString()}
-                            </span>
-                          )}
+
+                          <div className={styles.messageActions}>
+                            <button className={styles.actionBtn} onClick={() => setReplyToMessage(msg)}>↩️</button>
+                            <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '👍')}>👍</button>
+                            <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '❤️')}>❤️</button>
+                            <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '❤️‍🔥')}>❤️‍🔥</button>
+                            <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '💖')}>💖</button>
+                            <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '😂')}>😂</button>
+                            {msg.senderId === me?.id && (
+                              <>
+                                <button className={styles.actionBtn} onClick={() => startEditing(msg)}>✏️</button>
+                                <button className={`${styles.actionBtn} ${styles.deleteBtn}`} onClick={() => handleDeleteMessage(msg.id)}>🗑️</button>
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
-
-                      {msg.reactions && msg.reactions.length > 0 && (
-                        <div className={styles.reactionsContainer}>
-                          {Array.from(new Set(msg.reactions.map(r => r.emoji))).map(emoji => (
-                            <span 
-                              key={emoji} 
-                              onClick={() => handleReaction(msg.id, emoji)}
-                              style={{ cursor: 'pointer' }}
-                            >
-                              {emoji}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-
-                      <div className={styles.messageActions}>
-                        <button className={styles.actionBtn} onClick={() => setReplyToMessage(msg)}>↩️</button>
-                        <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '👍')}>👍</button>
-                        <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '❤️')}>❤️</button>
-                        <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '❤️‍🔥')}>❤️‍🔥</button>
-                        <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '💖')}>💖</button>
-                        <button className={styles.actionBtn} onClick={() => handleReaction(msg.id, '😂')}>😂</button>
-                        {msg.senderId === me?.id && (
-                          <>
-                            <button className={styles.actionBtn} onClick={() => startEditing(msg)}>✏️</button>
-                            <button className={`${styles.actionBtn} ${styles.deleteBtn}`} onClick={() => handleDeleteMessage(msg.id)}>🗑️</button>
-                          </>
-                        )}
+                    );
+                  })}
+                  
+                  {typingUsers.size > 0 && (
+                    <div className={`${styles.messageWrapper} ${styles.received}`}>
+                      <div className={styles.messageBubble} style={{ minWidth: '60px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+                        <div className={styles.typingIndicator}><span></span><span></span><span></span></div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
-              
-              {typingUsers.size > 0 && (
-                <div className={`${styles.messageWrapper} ${styles.received}`}>
-                  <div className={styles.messageBubble} style={{ minWidth: '60px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-                    <div className={styles.typingIndicator}><span></span><span></span><span></span></div>
-                  </div>
+                  )}
+                  <div ref={messagesEndRef} />
+                  
+                  {hasNewMessage && (
+                    <div 
+                      className={styles.newMessageBadge} 
+                      onClick={() => {
+                        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+                        setHasNewMessage(false);
+                      }}
+                    >
+                      New Message ↓
+                    </div>
+                  )}
                 </div>
-              )}
-              <div ref={messagesEndRef} />
-              
-              {hasNewMessage && (
-                <div 
-                  className={styles.newMessageBadge} 
-                  onClick={() => {
-                    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-                    setHasNewMessage(false);
-                  }}
-                >
-                  New Message ↓
-                </div>
-              )}
-            </div>
-            
-            <div className={styles.inputContainer}>
-              {replyToMessage && (
-                <div className={styles.replyPreviewBar}>
-                  <div>
-                    <strong>Replying to {replyToMessage.senderId === me?.id ? 'Yourself' : activeFriend?.username}</strong>
-                    <div style={{ fontSize: '0.8rem', color: '#667781' }}>{replyToMessage.content.substring(0, 100)}</div>
-                  </div>
-                  <button className={styles.closeReply} onClick={() => setReplyToMessage(null)}>✕</button>
-                </div>
-              )}
-              {editingMessage && (
-                <div className={styles.replyPreviewBar}>
-                  <div>
-                    <strong>Editing Message</strong>
-                    <div style={{ fontSize: '0.8rem', color: '#667781' }}>{editingMessage.content.substring(0, 100)}</div>
-                  </div>
-                  <button className={styles.closeReply} onClick={() => {
-                    setEditingMessage(null);
-                    setMessageInput('');
-                  }}>✕</button>
-                </div>
-              )}
-              
-              <form onSubmit={handleSendMessage} className={styles.inputWrapper}>
-                <button type="button" className={styles.attachmentBtn} onClick={() => alert("Attachments coming soon!")} title="Attach File">📎</button>
-                <input 
-                  type="text" 
-                  className={styles.messageInput} 
-                  placeholder={editingMessage ? "Edit your message..." : "Type a message..."}
-                  value={messageInput}
-                  onChange={handleInputChange}
-                />
-                <button type="button" style={{background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', padding: '0 8px'}} onClick={() => setShowEmojiPicker(!showEmojiPicker)}>😀</button>
-                <button type="submit" className={styles.sendButton} title={editingMessage ? "Save Edit" : "Send Message"}>
-                  {editingMessage ? "✓" : "➤"}
-                </button>
-              </form>
-              
-              {showEmojiPicker && (
-                <div className={styles.emojiPickerContainer}>
-                  <div className={styles.emojiCategories}>
-                    {Object.keys(EMOJI_CATEGORIES).map(cat => (
-                      <button key={cat} type="button" onClick={() => {
-                        const el = document.getElementById(`cat-${cat.replace(/\s/g, '_')}`);
-                        el?.scrollIntoView({ behavior: 'smooth' });
-                      }}>{cat.split(' ')[0]}</button>
-                    ))}
-                  </div>
-                  <div className={styles.emojiGrid}>
-                    {Object.entries(EMOJI_CATEGORIES).map(([cat, emojis]) => (
-                      <div key={cat} id={`cat-${cat.replace(/\s/g, '_')}`}>
-                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', padding: '8px 0 4px', position: 'sticky', top: 0, background: 'var(--bg-secondary)' }}>
-                          {cat}
-                        </div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px' }}>
-                          {emojis.map((e, i) => (
-                            <button key={`${cat}-${i}`} type="button" className={styles.emojiBtn} onClick={() => setMessageInput(prev => prev + e)}>
-                              {e}
-                            </button>
-                          ))}
-                        </div>
+                
+                <div className={styles.inputContainer}>
+                  {replyToMessage && (
+                    <div className={styles.replyPreviewBar}>
+                      <div>
+                        <strong>Replying to {replyToMessage.senderId === me?.id ? 'Yourself' : activeFriend?.username}</strong>
+                        <div style={{ fontSize: '0.8rem', color: '#667781' }}>{replyToMessage.content.substring(0, 100)}</div>
                       </div>
-                    ))}
-                  </div>
+                      <button className={styles.closeReply} onClick={() => setReplyToMessage(null)}>✕</button>
+                    </div>
+                  )}
+                  {editingMessage && (
+                    <div className={styles.replyPreviewBar}>
+                      <div>
+                        <strong>Editing Message</strong>
+                        <div style={{ fontSize: '0.8rem', color: '#667781' }}>{editingMessage.content.substring(0, 100)}</div>
+                      </div>
+                      <button className={styles.closeReply} onClick={() => {
+                        setEditingMessage(null);
+                        setMessageInput('');
+                      }}>✕</button>
+                    </div>
+                  )}
+                  
+                  <form onSubmit={handleSendMessage} className={styles.inputWrapper}>
+                    <input 
+                      type="file" 
+                      ref={fileInputRef} 
+                      style={{ display: 'none' }} 
+                      onChange={handleFileSelect}
+                    />
+                    <button 
+                      type="button" 
+                      className={styles.attachmentBtn} 
+                      onClick={() => fileInputRef.current?.click()} 
+                      title="Attach File"
+                      disabled={isUploading}
+                    >
+                      {isUploading ? '⏳' : '📎'}
+                    </button>
+                    <input 
+                      type="text" 
+                      className={styles.messageInput} 
+                      placeholder={editingMessage ? "Edit your message..." : "Type a message..."}
+                      value={messageInput}
+                      onChange={handleInputChange}
+                    />
+                    <button type="button" style={{background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', padding: '0 8px'}} onClick={() => setShowEmojiPicker(!showEmojiPicker)}>😀</button>
+                    <button type="submit" className={styles.sendButton} title={editingMessage ? "Save Edit" : "Send Message"}>
+                      {editingMessage ? "✓" : "➤"}
+                    </button>
+                  </form>
+                  
+                  {showEmojiPicker && (
+                    <div className={styles.emojiPickerContainer}>
+                      <div className={styles.emojiCategories}>
+                        {Object.keys(EMOJI_CATEGORIES).map(cat => (
+                          <button key={cat} type="button" onClick={() => {
+                            const el = document.getElementById(`cat-${cat.replace(/\s/g, '_')}`);
+                            el?.scrollIntoView({ behavior: 'smooth' });
+                          }}>{cat.split(' ')[0]}</button>
+                        ))}
+                      </div>
+                      <div className={styles.emojiGrid}>
+                        {Object.entries(EMOJI_CATEGORIES).map(([cat, emojis]) => (
+                          <div key={cat} id={`cat-${cat.replace(/\s/g, '_')}`}>
+                            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', padding: '8px 0 4px', position: 'sticky', top: 0, background: 'var(--bg-secondary)' }}>
+                              {cat}
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px' }}>
+                              {emojis.map((e, i) => (
+                                <button key={`${cat}-${i}`} type="button" className={styles.emojiBtn} onClick={() => setMessageInput(prev => prev + e)}>
+                                  {e}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              </>
+            )}
           </div>
         )}
       </div>

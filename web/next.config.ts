@@ -10,6 +10,10 @@ const nextConfig: NextConfig = {
       {
         source: '/socket.io/:path*',
         destination: 'https://pwcourses.onrender.com/socket.io/:path*',
+      },
+      {
+        source: '/uploads/:path*',
+        destination: 'https://pwcourses.onrender.com/uploads/:path*',
       }
     ];
   },

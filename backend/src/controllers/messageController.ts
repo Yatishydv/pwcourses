@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import prisma from '../prisma';
 import { getIo } from '../socket';
+import path from 'path';
+import fs from 'fs';
 const { Expo } = require('expo-server-sdk');
 const expo = new Expo();
 
@@ -39,12 +41,14 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
+    const now = new Date();
     const message = await prisma.message.create({
       data: {
         conversationId: conversationId as string,
         senderId: userId,
         content,
-        replyToId: replyToId || null
+        replyToId: replyToId || null,
+        senderReadAt: now // Sender has seen their own message
       },
       include: {
         reactions: true,
@@ -103,6 +107,113 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
   }
 };
 
+export const sendFileMessage = async (req: Request, res: Response): Promise<void> => {
+  const conversationId = req.params.conversationId as string;
+  // @ts-ignore
+  const userId = req.userId;
+  // @ts-ignore
+  const file = req.file;
+
+  try {
+    if (!file) {
+      res.status(400).json({ error: 'File is required' });
+      return;
+    }
+
+    const now = new Date();
+    const fileUrl = `/uploads/${file.filename}`;
+    const content = req.body.content || '';
+
+    const message = await prisma.message.create({
+      data: {
+        conversationId,
+        senderId: userId,
+        content: content || `📎 ${file.originalname}`,
+        fileName: file.originalname,
+        fileUrl,
+        fileType: file.mimetype,
+        fileSize: file.size,
+        senderReadAt: now
+      },
+      include: {
+        reactions: true,
+        replyTo: true
+      }
+    });
+
+    getIo().to(`chat_${conversationId}`).emit('new_message', { ...message, clientMsgId: req.body.clientMsgId });
+
+    // Push notification for file
+    const conv: any = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: { members: { include: { user: true } } }
+    });
+
+    if (conv) {
+      const receiverMember = conv.members.find((m: any) => m.userId !== userId);
+      if (receiverMember) {
+        const receiver = receiverMember.user;
+        getIo().to(receiver.id).emit('notification', {
+          type: 'new_message',
+          conversationId,
+          messageId: message.id
+        });
+
+        if (receiver.expoPushToken && Expo.isExpoPushToken(receiver.expoPushToken)) {
+          const sender = conv.members.find((m: any) => m.userId === userId)?.user;
+          const senderName = sender ? sender.username : 'Someone';
+          Promise.resolve().then(async () => {
+            try {
+              await expo.sendPushNotificationsAsync([{
+                to: receiver.expoPushToken,
+                sound: 'default',
+                title: `${senderName} sent a file`,
+                body: file.originalname,
+                data: { conversationId, messageId: message.id },
+              }]);
+            } catch (err) {
+              console.error('Push notification failed:', err);
+            }
+          });
+        }
+      }
+    }
+
+    res.status(201).json({ message });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const getFiles = async (req: Request, res: Response): Promise<void> => {
+  const conversationId = req.params.conversationId as string;
+
+  try {
+    const files = await prisma.message.findMany({
+      where: {
+        conversationId,
+        fileUrl: { not: null }
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        fileName: true,
+        fileUrl: true,
+        fileType: true,
+        fileSize: true,
+        senderId: true,
+        createdAt: true
+      }
+    });
+
+    res.status(200).json({ files });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 export const editMessage = async (req: Request, res: Response): Promise<void> => {
   const conversationId = req.params.conversationId as string;
   const messageId = req.params.messageId as string;
@@ -153,6 +264,18 @@ export const deleteMessage = async (req: Request, res: Response): Promise<void> 
     if (existing.senderId !== userId) {
       res.status(403).json({ error: 'Forbidden' });
       return;
+    }
+
+    // Delete file from disk if exists
+    if (existing.fileUrl) {
+      const filePath = path.join(__dirname, '..', '..', existing.fileUrl);
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      } catch (err) {
+        console.error('Failed to delete file:', err);
+      }
     }
 
     // Delete reactions first (if any cascading issues, but schema usually handles it)

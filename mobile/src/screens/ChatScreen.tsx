@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, Platform, Modal, ScrollView, Keyboard, Animated } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, Platform, Modal, ScrollView, Keyboard, Animated, Image, Linking, Alert } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { getSession } from '../utils/auth';
 import { API_URL } from '../utils/constants';
 import io, { Socket } from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as DocumentPicker from 'expo-document-picker';
 
 export default function ChatScreen() {
   const route = useRoute();
@@ -29,10 +30,22 @@ export default function ChatScreen() {
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [isUnlocking, setIsUnlocking] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
   const [isTyping, setIsTyping] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [hasNewMessages, setHasNewMessages] = useState(false);
+  const [showInputEmoji, setShowInputEmoji] = useState(false);
+  
+  // Call state
+  const [callState, setCallState] = useState<'idle' | 'calling' | 'incoming' | 'active'>('idle');
+  const [callType, setCallType] = useState<'audio' | 'video'>('audio');
+  const [callDuration, setCallDuration] = useState(0);
+  const callTimerRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Files modal
+  const [showFilesModal, setShowFilesModal] = useState(false);
+  const [sharedFiles, setSharedFiles] = useState<any[]>([]);
   const flatListRef = useRef<FlatList>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const keyboardHeight = useRef(new Animated.Value(0)).current;
@@ -213,6 +226,30 @@ export default function ChatScreen() {
         setMessages(prev => prev.filter(m => m.id !== messageId));
       });
 
+      // Auto-deletion: server permanently deleted messages after 48h
+      socketRef.current.on('messages_auto_deleted', ({ messageIds }: any) => {
+        setMessages(prev => prev.filter(m => !messageIds.includes(m.id)));
+      });
+
+      // WebRTC Call signaling
+      socketRef.current.on('call_offer', ({ callType: ct, callerId }: any) => {
+        setCallState('incoming');
+        setCallType(ct);
+      });
+
+      socketRef.current.on('call_answer', () => {
+        setCallState('active');
+        startCallTimer();
+      });
+
+      socketRef.current.on('call_end', () => {
+        endCall(false);
+      });
+
+      socketRef.current.on('call_reject', () => {
+        endCall(false);
+      });
+
       // Fetch existing messages
       fetchMessages(chatToken, token!);
 
@@ -274,6 +311,7 @@ export default function ChatScreen() {
       setMessages(prev => prev.map(m => m.id === msgId ? { ...m, content } : m));
       setMessageInput('');
       setEditingMessageId(null);
+      setIsSending(true);
       
       try {
         const token = await getSession();
@@ -317,6 +355,15 @@ export default function ChatScreen() {
 
     try {
       const token = await getSession();
+      if (!token) {
+        Alert.alert("Error", "Session token missing. Please log in again.");
+        setMessages(prev => prev.filter(m => m.id !== tempId));
+        return;
+      }
+      
+      const reqBody: any = { content, clientMsgId: tempId };
+      if (replyId) reqBody.replyToId = replyId;
+
       const res = await fetch(`${API_URL}/api/chats/${conversationId}/messages`, {
         method: 'POST',
         headers: { 
@@ -324,24 +371,67 @@ export default function ChatScreen() {
           'Authorization': `Bearer ${token}`,
           'x-chat-auth': chatAuthToken 
         },
-        body: JSON.stringify({ 
-          content,
-          replyToId: replyId,
-          clientMsgId: tempId
-        })
+        body: JSON.stringify(reqBody)
       });
       
       if (res.ok) {
         const data = await res.json();
         setMessages(prev => prev.map(m => m.id === tempId ? data.message : m));
       } else {
+        const errorText = await res.text();
+        console.error("Failed to send message:", errorText);
+        Alert.alert("Error", `Failed to send message: ${res.status}`);
         setMessages(prev => prev.filter(m => m.id !== tempId));
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error("Network error sending message:", err);
+      Alert.alert("Error", `Network error: ${err.message || 'Unknown error'}`);
       setMessages(prev => prev.filter(m => m.id !== tempId));
     } finally {
       setIsSending(false);
+    }
+  };
+
+  const handleFileUpload = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true
+      });
+      
+      if (result.canceled) return;
+      
+      const file = result.assets[0];
+      if (!file) return;
+
+      setIsUploading(true);
+      const token = await getSession();
+      if (!token) return;
+
+      const formData = new FormData();
+      formData.append('file', {
+        uri: file.uri,
+        name: file.name,
+        type: file.mimeType || 'application/octet-stream'
+      } as any);
+
+      const res = await fetch(`${API_URL}/api/chats/${conversationId}/messages/upload`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'x-chat-auth': chatAuthToken,
+        },
+        body: formData
+      });
+
+      if (!res.ok) {
+        Alert.alert('Error', 'Failed to upload file');
+      }
+    } catch (err: any) {
+      console.error('File upload error:', err);
+      Alert.alert('Error', 'Failed to pick file');
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -386,6 +476,35 @@ export default function ChatScreen() {
     }
   };
 
+  const handleClearHistory = () => {
+    Alert.alert(
+      'Clear Chat History',
+      'Are you sure? This will clear all messages in this chat.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: async () => {
+            setMessages([]);
+            try {
+              const token = await getSession();
+              await fetch(`${API_URL}/api/chats/${conversationId}/history`, {
+                method: 'DELETE',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'x-chat-auth': chatAuthToken
+                }
+              });
+            } catch (err) {
+              console.error(err);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const handleTextChange = (text: string) => {
     setMessageInput(text);
     if (!isTyping) {
@@ -412,6 +531,121 @@ export default function ChatScreen() {
   const scrollToBottom = () => {
     flatListRef.current?.scrollToEnd({ animated: true });
     setHasNewMessages(false);
+  };
+
+  // === Call Functions ===
+  const startCall = (type: 'audio' | 'video') => {
+    setCallType(type);
+    setCallState('calling');
+    socketRef.current?.emit('call_offer', {
+      conversationId,
+      offer: { type: 'offer' }, // Simplified — full WebRTC needs native module
+      callType: type
+    });
+  };
+
+  const acceptCall = () => {
+    setCallState('active');
+    startCallTimer();
+    socketRef.current?.emit('call_answer', {
+      conversationId,
+      answer: { type: 'answer' }
+    });
+  };
+
+  const rejectCall = () => {
+    socketRef.current?.emit('call_reject', { conversationId });
+    endCall(false);
+  };
+
+  const endCall = (notify = true) => {
+    if (notify) {
+      socketRef.current?.emit('call_end', { conversationId });
+    }
+    if (callTimerRef.current) clearInterval(callTimerRef.current);
+    setCallState('idle');
+    setCallDuration(0);
+  };
+
+  const startCallTimer = () => {
+    setCallDuration(0);
+    callTimerRef.current = setInterval(() => {
+      setCallDuration(prev => prev + 1);
+    }, 1000);
+  };
+
+  const formatCallDuration = (secs: number) => {
+    const m = Math.floor(secs / 60).toString().padStart(2, '0');
+    const s = (secs % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
+
+  // === Fetch Shared Files ===
+  const fetchSharedFiles = async () => {
+    try {
+      const token = await getSession();
+      if (!token) return;
+      const res = await fetch(`${API_URL}/api/chats/${conversationId}/messages/files`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'x-chat-auth': chatAuthToken
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSharedFiles(data.files || []);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
+  const renderFileContent = (item: any) => {
+    if (!item.fileUrl) return null;
+    const url = `${API_URL}${item.fileUrl}`;
+    const type = item.fileType || '';
+    const name = item.fileName || 'File';
+    const isMe = item.senderId === meId;
+
+    if (type.startsWith('image/')) {
+      return (
+        <TouchableOpacity onPress={() => Linking.openURL(url)} style={{ marginBottom: 6 }}>
+          <Image source={{ uri: url }} style={{ width: 200, height: 150, borderRadius: 8 }} resizeMode="cover" />
+        </TouchableOpacity>
+      );
+    }
+    if (type.startsWith('video/')) {
+      return (
+        <TouchableOpacity onPress={() => Linking.openURL(url)} style={{ marginBottom: 6, padding: 12, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: 8 }}>
+          <Text style={{ fontSize: 16 }}>🎬 {name}</Text>
+          <Text style={{ fontSize: 11, opacity: 0.7 }}>Tap to open video</Text>
+        </TouchableOpacity>
+      );
+    }
+    if (type.startsWith('audio/')) {
+      return (
+        <TouchableOpacity onPress={() => Linking.openURL(url)} style={{ marginBottom: 6, padding: 12, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: 8 }}>
+          <Text style={{ fontSize: 16 }}>🎵 {name}</Text>
+          <Text style={{ fontSize: 11, opacity: 0.7 }}>Tap to play audio</Text>
+        </TouchableOpacity>
+      );
+    }
+    // Generic file
+    return (
+      <TouchableOpacity onPress={() => Linking.openURL(url)} style={{ marginBottom: 6, padding: 12, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Text style={{ fontSize: 24 }}>📄</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontWeight: '600', fontSize: 13, color: isMe ? '#fff' : undefined }}>{name}</Text>
+          {item.fileSize && <Text style={{ fontSize: 11, opacity: 0.7 }}>{formatFileSize(item.fileSize)}</Text>}
+        </View>
+      </TouchableOpacity>
+    );
   };
 
   if (!unlocked) {
@@ -448,12 +682,24 @@ export default function ChatScreen() {
           <Text style={{ color: isDark ? '#f3f4f6' : '#1e293b', fontSize: 16 }}>◀ Back</Text>
         </TouchableOpacity>
         <Text style={styles.title}>{friendName}</Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <TouchableOpacity onPress={toggleTheme} style={{ padding: 8 }}>
-            <Text style={{ fontSize: 18 }}>{isDark ? '☀️' : '🌙'}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <TouchableOpacity onPress={() => startCall('audio')} style={{ padding: 6 }}>
+            <Text style={{ fontSize: 16 }}>📞</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={handleLock} style={{ padding: 8 }}>
-            <Text style={{ fontSize: 16 }}>🔒</Text>
+          <TouchableOpacity onPress={() => startCall('video')} style={{ padding: 6 }}>
+            <Text style={{ fontSize: 16 }}>📹</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => { fetchSharedFiles(); setShowFilesModal(true); }} style={{ padding: 6 }}>
+            <Text style={{ fontSize: 16 }}>📁</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={toggleTheme} style={{ padding: 6 }}>
+            <Text style={{ fontSize: 16 }}>{isDark ? '☀️' : '🌙'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleClearHistory} style={{ padding: 6 }}>
+            <Text style={{ fontSize: 14 }}>🗑️</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleLock} style={{ padding: 6 }}>
+            <Text style={{ fontSize: 14 }}>🔒</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -512,7 +758,11 @@ export default function ChatScreen() {
                 </View>
               )}
               <View style={[styles.messageBubble, isMe ? styles.sentBubble : styles.receivedBubble]}>
-                <Text style={isMe ? styles.sentText : styles.receivedText}>{item.content}</Text>
+                {renderFileContent(item)}
+                
+                {(!item.fileUrl || item.content !== `📎 ${item.fileName}`) && (
+                  <Text style={isMe ? styles.sentText : styles.receivedText}>{item.content}</Text>
+                )}
                 
                 <View style={styles.messageMeta}>
                   <Text style={[styles.messageTime, isMe ? styles.messageTimeSent : null]}>
@@ -523,7 +773,7 @@ export default function ChatScreen() {
                       onPress={() => {
                         if (item.read && item.readAt) {
                           const seenDate = new Date(item.readAt);
-                          alert(`Seen at ${seenDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${seenDate.toLocaleDateString()}`);
+                          Alert.alert('Seen', `Seen at ${seenDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${seenDate.toLocaleDateString()}`);
                         }
                       }}
                       activeOpacity={item.read ? 0.6 : 1}
@@ -585,9 +835,23 @@ export default function ChatScreen() {
             </TouchableOpacity>
           </View>
         )}
+        
+        {/* Inline emoji picker for text input */}
+        {showInputEmoji && (
+          <View style={styles.inlineEmojiPicker}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {EMOJIS.map(emoji => (
+                <TouchableOpacity key={emoji} onPress={() => setMessageInput(prev => prev + emoji)} style={styles.inlineEmojiBtn}>
+                  <Text style={{ fontSize: 22 }}>{emoji}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+        
         <View style={styles.inputArea}>
-          <TouchableOpacity style={{ padding: 8 }} onPress={() => alert("Attachments coming soon!")}>
-            <Text style={{ fontSize: 20 }}>📎</Text>
+          <TouchableOpacity style={{ padding: 8 }} onPress={handleFileUpload} disabled={isUploading}>
+            <Text style={{ fontSize: 20 }}>{isUploading ? '⏳' : '📎'}</Text>
           </TouchableOpacity>
           <TextInput
             style={styles.messageInput}
@@ -597,6 +861,9 @@ export default function ChatScreen() {
             onChangeText={handleTextChange}
             multiline
           />
+          <TouchableOpacity style={{ padding: 8 }} onPress={() => setShowInputEmoji(!showInputEmoji)}>
+            <Text style={{ fontSize: 20 }}>😀</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
             <Text style={{ color: 'white' }}>➤</Text>
           </TouchableOpacity>
@@ -651,6 +918,71 @@ export default function ChatScreen() {
         </TouchableOpacity>
       </Modal>
 
+      {/* Call UI Modal */}
+      <Modal visible={callState !== 'idle'} transparent animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center', alignItems: 'center', gap: 24 }}>
+          <Text style={{ fontSize: 64 }}>{callType === 'video' ? '📹' : '📞'}</Text>
+          <Text style={{ color: 'white', fontSize: 22, fontWeight: '700' }}>{friendName}</Text>
+          
+          {callState === 'calling' && (
+            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16 }}>Calling...</Text>
+          )}
+          {callState === 'incoming' && (
+            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16 }}>Incoming {callType} call...</Text>
+          )}
+          {callState === 'active' && (
+            <Text style={{ color: 'white', fontSize: 28, fontWeight: '700' }}>{formatCallDuration(callDuration)}</Text>
+          )}
+
+          <View style={{ flexDirection: 'row', gap: 20, marginTop: 24 }}>
+            {callState === 'incoming' && (
+              <TouchableOpacity onPress={acceptCall} style={{ backgroundColor: '#10b981', paddingHorizontal: 32, paddingVertical: 16, borderRadius: 999 }}>
+                <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 18 }}>✓ Accept</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity onPress={() => callState === 'incoming' ? rejectCall() : endCall(true)} style={{ backgroundColor: '#ef4444', paddingHorizontal: 32, paddingVertical: 16, borderRadius: 999 }}>
+              <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 18 }}>✕ End</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Files Modal */}
+      <Modal visible={showFilesModal} transparent animationType="slide">
+        <View style={{ flex: 1, backgroundColor: isDark ? 'rgba(0,0,0,0.9)' : 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+          <View style={{ backgroundColor: isDark ? '#1f2c34' : '#ffffff', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '80%', padding: 20 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: isDark ? '#f3f4f6' : '#1e293b' }}>Shared Files</Text>
+              <TouchableOpacity onPress={() => setShowFilesModal(false)}>
+                <Text style={{ fontSize: 24, color: isDark ? '#9ca3af' : '#64748b' }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {sharedFiles.length === 0 ? (
+                <View style={{ alignItems: 'center', paddingVertical: 40 }}>
+                  <Text style={{ fontSize: 40, marginBottom: 12 }}>📁</Text>
+                  <Text style={{ color: isDark ? '#9ca3af' : '#64748b', fontSize: 15 }}>No files shared yet</Text>
+                </View>
+              ) : (
+                sharedFiles.map((f: any) => (
+                  <TouchableOpacity key={f.id} onPress={() => Linking.openURL(`${API_URL}${f.fileUrl}`)} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: isDark ? '#374151' : '#e2e8f0' }}>
+                    <Text style={{ fontSize: 24 }}>
+                      {f.fileType?.startsWith('image/') ? '🖼️' : f.fileType?.startsWith('video/') ? '🎬' : f.fileType?.startsWith('audio/') ? '🎵' : '📄'}
+                    </Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontWeight: '600', color: isDark ? '#f3f4f6' : '#1e293b', fontSize: 14 }} numberOfLines={1}>{f.fileName}</Text>
+                      <Text style={{ fontSize: 12, color: isDark ? '#9ca3af' : '#64748b' }}>
+                        {formatFileSize(f.fileSize)} · {new Date(f.createdAt).toLocaleDateString()}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
     </View>
   );
 }
@@ -688,7 +1020,7 @@ const getStyles = (isDark: boolean) => {
     receivedText: { color: textRecv, fontSize: 15, lineHeight: 22 },
     
     inputAreaWrapper: { backgroundColor: bgCard, borderTopWidth: 1, borderTopColor: borderCol },
-    inputArea: { flexDirection: 'row', padding: 12, paddingBottom: Platform.OS === 'ios' ? 24 : 12, alignItems: 'flex-end', gap: 12 },
+    inputArea: { flexDirection: 'row', padding: 12, paddingBottom: Platform.OS === 'ios' ? 24 : 12, alignItems: 'flex-end', gap: 8 },
     messageInput: { flex: 1, backgroundColor: inputBg, color: textPrimary, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 14, borderRadius: 24, fontSize: 15, maxHeight: 120 },
     sendButton: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center', elevation: 2, shadowColor: '#3b82f6', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
     
@@ -700,6 +1032,9 @@ const getStyles = (isDark: boolean) => {
     
     replyPreview: { flexDirection: 'row', justifyContent: 'space-between', padding: 12, backgroundColor: inputBg, borderTopWidth: 1, borderTopColor: borderCol, borderLeftWidth: 4, borderLeftColor: '#3b82f6', alignItems: 'center' },
     replyPreviewText: { color: textSecondary, flex: 1, marginRight: 8, fontSize: 14, fontStyle: 'italic' },
+    
+    inlineEmojiPicker: { backgroundColor: inputBg, paddingVertical: 8, paddingHorizontal: 4, borderTopWidth: 1, borderTopColor: borderCol },
+    inlineEmojiBtn: { padding: 6, marginHorizontal: 2 },
     
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
     emojiCard: { backgroundColor: bgCard, padding: 24, borderRadius: 24, width: '85%', maxHeight: '80%', elevation: 10, shadowColor: '#000', shadowOffset: {width:0,height:10}, shadowOpacity: 0.2, shadowRadius: 20 },

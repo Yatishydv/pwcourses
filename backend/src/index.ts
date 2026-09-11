@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
 import authRoutes from './routes/auth';
 import friendRoutes from './routes/friends';
 import chatRoutes from './routes/chats';
@@ -19,9 +21,19 @@ app.use(cors({
 app.use(express.json());
 app.use(cookieParser());
 
+// Ensure uploads directory exists
+const uploadsDir = path.join(__dirname, '..', 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Serve uploaded files statically
+app.use('/uploads', express.static(uploadsDir));
+
 // Routes
 import http from 'http';
 import { initSocket } from './socket';
+import { startCleanupJob } from './jobs/cleanup';
 
 app.use('/api/auth', authRoutes);
 app.use('/api/friends', friendRoutes);
@@ -34,6 +46,9 @@ app.get('/health', (req, res) => {
 
 const server = http.createServer(app);
 initSocket(server);
+
+// Start the background cleanup job for auto-deleting messages
+startCleanupJob();
 
 server.listen(port, () => {
   console.log(`Backend server running on port ${port}`);

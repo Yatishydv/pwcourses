@@ -112,17 +112,113 @@ export const initSocket = (httpServer: HttpServer) => {
       }
     });
 
+    // Updated mark_read with per-user tracking for 48h auto-deletion
     socket.on('mark_read', async ({ conversationId, messageIds }) => {
       try {
         const readAt = new Date();
-        await prisma.message.updateMany({
-          where: { id: { in: messageIds }, conversationId, senderId: { not: userId } },
-          data: { read: true, readAt }
+
+        // Validate: user must be a member of this conversation
+        const membership = await prisma.conversationMember.findFirst({
+          where: { conversationId, userId }
         });
-        socket.to(`chat_${conversationId}`).emit('messages_read', { conversationId, messageIds, readBy: userId, readAt: readAt.toISOString() });
+        if (!membership) {
+          console.error(`[mark_read] User ${userId} is not a member of conversation ${conversationId}`);
+          return;
+        }
+
+        // Fetch the messages to check ownership and current state
+        const messages = await prisma.message.findMany({
+          where: {
+            id: { in: messageIds },
+            conversationId,
+            senderId: { not: userId } // Only mark messages sent by the OTHER user
+          }
+        });
+
+        if (messages.length === 0) return;
+
+        const idsToUpdate = messages
+          .filter(m => !m.receiverReadAt) // Only update if receiverReadAt not already set (idempotent)
+          .map(m => m.id);
+
+        if (idsToUpdate.length > 0) {
+          // Set receiverReadAt and bothSeenAt (since senderReadAt is always set at creation)
+          await prisma.message.updateMany({
+            where: { id: { in: idsToUpdate } },
+            data: {
+              read: true,
+              readAt: readAt,
+              receiverReadAt: readAt,
+              bothSeenAt: readAt // Both have now seen it — 48h timer starts
+            }
+          });
+        }
+
+        // Also update messages that already had receiverReadAt but just need the read flag
+        const alreadyTrackedIds = messages
+          .filter(m => m.receiverReadAt && !m.read)
+          .map(m => m.id);
+
+        if (alreadyTrackedIds.length > 0) {
+          await prisma.message.updateMany({
+            where: { id: { in: alreadyTrackedIds } },
+            data: { read: true, readAt: readAt }
+          });
+        }
+
+        const allAffectedIds = [...new Set([...idsToUpdate, ...alreadyTrackedIds])];
+        if (allAffectedIds.length > 0) {
+          socket.to(`chat_${conversationId}`).emit('messages_read', {
+            conversationId,
+            messageIds: allAffectedIds,
+            readBy: userId,
+            readAt: readAt.toISOString()
+          });
+        }
       } catch (e) {
         console.error('Mark read error:', e);
       }
+    });
+
+    // ===== WebRTC Call Signaling =====
+    socket.on('call_offer', async ({ conversationId, offer, callType }) => {
+      // callType: 'audio' or 'video'
+      socket.to(`chat_${conversationId}`).emit('call_offer', {
+        conversationId,
+        offer,
+        callType,
+        callerId: userId
+      });
+    });
+
+    socket.on('call_answer', ({ conversationId, answer }) => {
+      socket.to(`chat_${conversationId}`).emit('call_answer', {
+        conversationId,
+        answer,
+        answererId: userId
+      });
+    });
+
+    socket.on('ice_candidate', ({ conversationId, candidate }) => {
+      socket.to(`chat_${conversationId}`).emit('ice_candidate', {
+        conversationId,
+        candidate,
+        senderId: userId
+      });
+    });
+
+    socket.on('call_end', ({ conversationId }) => {
+      socket.to(`chat_${conversationId}`).emit('call_end', {
+        conversationId,
+        endedBy: userId
+      });
+    });
+
+    socket.on('call_reject', ({ conversationId }) => {
+      socket.to(`chat_${conversationId}`).emit('call_reject', {
+        conversationId,
+        rejectedBy: userId
+      });
     });
 
     socket.on('disconnect', () => {
