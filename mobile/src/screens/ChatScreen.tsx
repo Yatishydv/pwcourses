@@ -37,6 +37,9 @@ export default function ChatScreen() {
   const [hasNewMessages, setHasNewMessages] = useState(false);
   const [showInputEmoji, setShowInputEmoji] = useState(false);
   
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const [firstUnreadIndex, setFirstUnreadIndex] = useState<number | null>(null);
+  
   // Call state
   const [callState, setCallState] = useState<'idle' | 'calling' | 'incoming' | 'active'>('idle');
   const [callType, setCallType] = useState<'audio' | 'video'>('audio');
@@ -51,11 +54,11 @@ export default function ChatScreen() {
   const keyboardHeight = useRef(new Animated.Value(0)).current;
 
   const EMOJIS = [
-    '😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚',
-    '👋','🤚','🖐','✋','🖖','👌','🤌','🤏','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','👍','👎',
-    '❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','❤️‍🔥','💯',
-    '🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐻‍❄️','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🙈','🙉','🙊','🐒',
-    '🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓','🫐','🍈','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🥑','🍆','🌶️'
+    '😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😔','😪','🤤','😴','🥳','🤩','😎','🤓','🧐','😕','😟','🙁','😮','😯','😲','😳','🥺','😢','😭','😤','😠','😡','🤬','🤯','😰','😥','😱','🥶','🥵','😈','👿','💀','☠️','💩','🤡','👹','👺',
+    '👋','🤚','🖐','✋','🖖','👌','🤌','🤏','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','👍','👎','✊','👊','🤛','🤜','👏','🙌','👐','🤲','🤝','🙏','💪',
+    '❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','❤️‍🔥','💯','💢','💥','💫','💦','💨','🕳️','💣','💬','👁️‍🗨️','🗨️','🗯️','💭',
+    '🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐻‍❄️','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🙈','🙉','🙊','🐒','🐔','🐧','🐦','🐤','🦄','🐝','🐛','🦋','🐌','🐞','🐜','🪲',
+    '🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓','🫐','🍈','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🥑','🍆','🌶️','🫑','🥒','🥬','🧅','🍄','🌽','🥕','🧄','🥔','🍞','🥐','🍕','🍔','🍟','🌭','🍿','🧂','🥓','🥚','🍳','🧇','🥞','🧈','🍰','🎂','🍩','🍪','🍫','🍬','🍭'
   ];
 
   const socketRef = useRef<Socket | null>(null);
@@ -269,6 +272,15 @@ export default function ChatScreen() {
     });
     if (res.ok) {
       const data = await res.json();
+      
+      let unreadIdx = null;
+      for (let i = 0; i < data.messages.length; i++) {
+        if (!data.messages[i].read && data.messages[i].senderId !== meId) {
+          unreadIdx = i;
+          break;
+        }
+      }
+      setFirstUnreadIndex(unreadIdx);
       setMessages(data.messages);
       
       const unreadIds = data.messages
@@ -298,6 +310,8 @@ export default function ChatScreen() {
     setChatAuthToken('');
     setMessages([]);
     setChatPin('');
+    setIsInitialLoad(true);
+    setFirstUnreadIndex(null);
   };
 
   const handleSend = async () => {
@@ -520,8 +534,10 @@ export default function ChatScreen() {
 
   const handleScroll = (event: any) => {
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
-    const paddingToBottom = 50;
+    const paddingToBottom = 100;
     const isNear = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom;
+    setIsNearBottom(isNear);
+    if (isNear && hasNewMessages) setHasNewMessages(false);
     setIsNearBottom(isNear);
     if (isNear) {
       setHasNewMessages(false);
@@ -704,46 +720,77 @@ export default function ChatScreen() {
         </View>
       </View>
 
-      <FlatList
-        ref={flatListRef}
-        onScroll={handleScroll}
-        scrollEventThrottle={16}
-        onContentSizeChange={() => {
-          if (isNearBottom) {
-            flatListRef.current?.scrollToEnd({ animated: true });
-          }
-        }}
-        onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
-        data={messages}
-        keyExtractor={item => item.id}
-        renderItem={({ item, index }) => {
-          const isMe = item.senderId === meId;
-          const rx = item.reactions || [];
-          
-          // Date separator logic
-          const prevItem = index > 0 ? messages[index - 1] : null;
-          const currentDate = new Date(item.createdAt).toDateString();
-          const prevDate = prevItem ? new Date(prevItem.createdAt).toDateString() : null;
-          const showDateSep = !prevDate || currentDate !== prevDate;
-          
-          let dateLabel = '';
-          if (showDateSep) {
-            const msgDate = new Date(item.createdAt);
-            const today = new Date();
-            const yesterday = new Date(today);
-            yesterday.setDate(yesterday.getDate() - 1);
-            if (msgDate.toDateString() === today.toDateString()) dateLabel = 'TODAY';
-            else if (msgDate.toDateString() === yesterday.toDateString()) dateLabel = 'YESTERDAY';
-            else dateLabel = msgDate.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }).toUpperCase();
-          }
-          
-          return (
-            <View>
-              {showDateSep && (
-                <View style={styles.dateSeparator}>
-                  <Text style={styles.dateSeparatorText}>{dateLabel}</Text>
-                </View>
-              )}
+      <View style={{ flex: 1, opacity: isInitialLoad ? 0 : 1 }}>
+        <FlatList
+          ref={flatListRef}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+          onContentSizeChange={() => {
+            if (isInitialLoad && messages.length > 0) {
+              if (firstUnreadIndex !== null) {
+                flatListRef.current?.scrollToIndex({ index: firstUnreadIndex, animated: false, viewPosition: 0.5 });
+              } else {
+                flatListRef.current?.scrollToEnd({ animated: false });
+              }
+              setTimeout(() => setIsInitialLoad(false), 50);
+            } else if (isNearBottom && !isInitialLoad) {
+              flatListRef.current?.scrollToEnd({ animated: true });
+            }
+          }}
+          onLayout={() => {
+            if (isInitialLoad && messages.length > 0) {
+              if (firstUnreadIndex !== null) {
+                flatListRef.current?.scrollToIndex({ index: firstUnreadIndex, animated: false, viewPosition: 0.5 });
+              } else {
+                flatListRef.current?.scrollToEnd({ animated: false });
+              }
+              setTimeout(() => setIsInitialLoad(false), 50);
+            }
+          }}
+          onScrollToIndexFailed={info => {
+            const wait = new Promise(resolve => setTimeout(resolve, 100));
+            wait.then(() => {
+              flatListRef.current?.scrollToIndex({ index: info.index, animated: false, viewPosition: 0.5 });
+            });
+          }}
+          data={messages}
+          keyExtractor={item => item.id}
+          renderItem={({ item, index }) => {
+            const isMe = item.senderId === meId;
+            const rx = item.reactions || [];
+            
+            // Date separator logic
+            const prevItem = index > 0 ? messages[index - 1] : null;
+            const currentDate = new Date(item.createdAt).toDateString();
+            const prevDate = prevItem ? new Date(prevItem.createdAt).toDateString() : null;
+            const showDateSep = !prevDate || currentDate !== prevDate;
+            const isFirstUnread = index === firstUnreadIndex;
+            
+            let dateLabel = '';
+            if (showDateSep) {
+              const msgDate = new Date(item.createdAt);
+              const today = new Date();
+              const yesterday = new Date(today);
+              yesterday.setDate(yesterday.getDate() - 1);
+              if (msgDate.toDateString() === today.toDateString()) dateLabel = 'TODAY';
+              else if (msgDate.toDateString() === yesterday.toDateString()) dateLabel = 'YESTERDAY';
+              else dateLabel = msgDate.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }).toUpperCase();
+            }
+            
+            return (
+              <View>
+                {showDateSep && (
+                  <View style={styles.dateSeparator}>
+                    <Text style={styles.dateSeparatorText}>{dateLabel}</Text>
+                  </View>
+                )}
+                {isFirstUnread && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 16, paddingHorizontal: 16 }}>
+                    <View style={{ flex: 1, height: 1, backgroundColor: 'rgba(59, 130, 246, 0.3)' }} />
+                    <Text style={{ paddingHorizontal: 12, fontSize: 12, fontWeight: '600', color: '#3b82f6', letterSpacing: 1 }}>UNREAD MESSAGES</Text>
+                    <View style={{ flex: 1, height: 1, backgroundColor: 'rgba(59, 130, 246, 0.3)' }} />
+                  </View>
+                )}
               <TouchableOpacity 
               onLongPress={() => {
                 setSelectedMessageId(item.id);
@@ -799,24 +846,28 @@ export default function ChatScreen() {
         contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: 32 }}
       />
 
-      {typingUsers.size > 0 && (
-        <View style={styles.typingIndicatorWrapper}>
-          <Text style={styles.typingText}>
-            {Array.from(typingUsers).length === 1 ? 'Someone is typing' : 'Multiple people are typing'}
-          </Text>
-          <View style={styles.bouncingDots}>
-            <Text style={styles.dot}>●</Text>
-            <Text style={styles.dot}>●</Text>
-            <Text style={styles.dot}>●</Text>
+        {typingUsers.size > 0 && (
+          <View style={styles.typingIndicatorWrapper}>
+            <Text style={styles.typingText}>
+              {Array.from(typingUsers).length === 1 ? 'Someone is typing' : 'Multiple people are typing'}
+            </Text>
+            <View style={styles.bouncingDots}>
+              <Text style={styles.dot}>●</Text>
+              <Text style={styles.dot}>●</Text>
+              <Text style={styles.dot}>●</Text>
+            </View>
           </View>
-        </View>
-      )}
+        )}
 
-      {hasNewMessages && (
-        <TouchableOpacity style={styles.newMessageBadge} onPress={scrollToBottom}>
-          <Text style={styles.newMessageText}>New Message ↓</Text>
-        </TouchableOpacity>
-      )}
+        {hasNewMessages && (
+          <TouchableOpacity style={styles.newMessageBadge} onPress={() => {
+            flatListRef.current?.scrollToEnd({ animated: true });
+            setHasNewMessages(false);
+          }}>
+            <Text style={styles.newMessageText}>New Message ↓</Text>
+          </TouchableOpacity>
+        )}
+      </View>
 
       <View style={styles.inputAreaWrapper}>
         {replyToMessage && (

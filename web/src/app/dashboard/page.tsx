@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, FormEvent } from 'react';
+import { useEffect, useLayoutEffect, useState, useRef, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
 import styles from './dashboard.module.css';
@@ -98,6 +98,8 @@ export default function Dashboard() {
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
   const [seenMessageId, setSeenMessageId] = useState<string | null>(null);
   const [hasNewMessage, setHasNewMessage] = useState(false);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const [firstUnreadMessageId, setFirstUnreadMessageId] = useState<string | null>(null);
   const isNearBottomRef = useRef(true);
   
   const [showFriendsModal, setShowFriendsModal] = useState(false);
@@ -281,19 +283,39 @@ export default function Dashboard() {
     fetchMessages(activeChatId, chatAuthTokens[activeChatId]);
   }, [activeChatId, chatAuthTokens]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (messages.length === 0) return;
+
+    if (isInitialLoad) {
+      // First load: Instant jump to unread divider or bottom
+      const unreadEl = document.getElementById('unread-divider');
+      if (unreadEl) {
+        unreadEl.scrollIntoView({ behavior: 'auto', block: 'center' });
+      } else {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      }
+      // Use setTimeout to ensure the browser has painted the jump before allowing smooth scrolls
+      setTimeout(() => {
+        setIsInitialLoad(false);
+      }, 50);
+      return;
+    }
+
+    // Subsequent updates (e.g. new message arrives)
     if (isNearBottomRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     } else {
       const lastMsg = messages[messages.length - 1];
       if (lastMsg && lastMsg.senderId === me?.id) {
+        // If I sent the message, always scroll to bottom
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
         isNearBottomRef.current = true;
       } else if (lastMsg && lastMsg.senderId !== me?.id) {
+        // If I received a message while scrolled up, show badge
         setHasNewMessage(true);
       }
     }
-  }, [messages, typingUsers]);
+  }, [messages, isInitialLoad]);
 
   // === WebRTC Helpers ===
   const createPeerConnection = (): RTCPeerConnection => {
@@ -597,6 +619,8 @@ export default function Dashboard() {
     setTypingUsers(new Set());
     isNearBottomRef.current = true;
     setHasNewMessage(false);
+    setIsInitialLoad(true);
+    setFirstUnreadMessageId(null);
     setActiveTab('conversation');
     
     if (chatAuthTokens[convId]) {
@@ -684,6 +708,15 @@ export default function Dashboard() {
     });
     if (res.ok) {
       const data = await res.json();
+      
+      let firstUnreadId = null;
+      for (const msg of data.messages) {
+        if (!msg.read && msg.senderId !== me?.id) {
+          firstUnreadId = msg.id;
+          break; // First chronological unread message
+        }
+      }
+      setFirstUnreadMessageId(firstUnreadId);
       setMessages(data.messages);
       
       const unreadIds = data.messages
@@ -1084,11 +1117,12 @@ export default function Dashboard() {
               </div>
             ) : (
               <>
-                <div className={styles.messagesArea} onScroll={handleScroll}>
+                <div className={styles.messagesArea} onScroll={handleScroll} style={{ opacity: isInitialLoad ? 0 : 1, transition: 'opacity 0.2s' }}>
                   {messages.map((msg, i) => {
                     const prevMsg = messages[i - 1];
                     const showDate = !prevMsg || new Date(msg.createdAt).toDateString() !== new Date(prevMsg.createdAt).toDateString();
                     const isHovered = hoveredMessageId === msg.id;
+                    const isFirstUnread = msg.id === firstUnreadMessageId;
 
                     return (
                       <div 
@@ -1096,6 +1130,14 @@ export default function Dashboard() {
                         style={{ display: 'flex', flexDirection: 'column', width: '100%' }}
                       >
                         {showDate && renderDateSeparator(msg.createdAt)}
+                        
+                        {isFirstUnread && (
+                          <div id="unread-divider" style={{ display: 'flex', alignItems: 'center', margin: '16px 0' }}>
+                            <div style={{ flex: 1, height: 1, backgroundColor: 'rgba(59, 130, 246, 0.3)' }}></div>
+                            <span style={{ padding: '0 12px', fontSize: '0.75rem', fontWeight: 600, color: '#3b82f6', letterSpacing: 1 }}>UNREAD MESSAGES</span>
+                            <div style={{ flex: 1, height: 1, backgroundColor: 'rgba(59, 130, 246, 0.3)' }}></div>
+                          </div>
+                        )}
                         
                         <div 
                           className={`${styles.messageWrapper} ${msg.senderId === me?.id ? styles.sent : styles.received} ${isHovered ? styles.forceHover : ''}`}
