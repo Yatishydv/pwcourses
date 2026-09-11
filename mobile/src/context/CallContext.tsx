@@ -3,8 +3,7 @@ import { View, Text, Modal, TouchableOpacity, Dimensions } from 'react-native';
 import io, { Socket } from 'socket.io-client';
 import { RTCPeerConnection, RTCIceCandidate, RTCSessionDescription, mediaDevices, MediaStream, RTCView } from 'react-native-webrtc';
 import { getSession } from '../utils/auth';
-
-const API_URL = 'http://192.168.1.5:5000';
+import { API_URL } from '../utils/constants';
 
 interface CallContextProps {
   initiateCall: (conversationId: string, friendName: string, type: 'audio' | 'video', chatAuthToken: string) => void;
