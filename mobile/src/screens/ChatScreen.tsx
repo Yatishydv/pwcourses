@@ -40,6 +40,8 @@ export default function ChatScreen() {
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [firstUnreadIndex, setFirstUnreadIndex] = useState<number | null>(null);
   
+  const [stagedFile, setStagedFile] = useState<any>(null);
+  
   // Call state
   const [callState, setCallState] = useState<'idle' | 'calling' | 'incoming' | 'active'>('idle');
   const [callType, setCallType] = useState<'audio' | 'video'>('audio');
@@ -315,8 +317,8 @@ export default function ChatScreen() {
   };
 
   const handleSend = async () => {
-    if (isSending) return;
-    if (!messageInput.trim()) return;
+    if (!messageInput.trim() && !stagedFile) return;
+    if (isSending || isUploading) return;
 
     if (editingMessageId) {
       const content = messageInput;
@@ -329,6 +331,7 @@ export default function ChatScreen() {
       
       try {
         const token = await getSession();
+        if (!token) return;
         await fetch(`${API_URL}/api/chats/${conversationId}/messages/${msgId}`, {
           method: 'PUT',
           headers: { 
@@ -344,6 +347,47 @@ export default function ChatScreen() {
         setIsSending(false);
       }
       return;
+    }
+
+    if (stagedFile) {
+      setIsUploading(true);
+      try {
+        const token = await getSession();
+        if (token) {
+          const formData = new FormData();
+          formData.append('file', {
+            uri: stagedFile.uri,
+            name: stagedFile.name,
+            type: stagedFile.mimeType || 'application/octet-stream'
+          } as any);
+
+          const res = await fetch(`${API_URL}/api/chats/${conversationId}/messages/upload`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'x-chat-auth': chatAuthToken,
+            },
+            body: formData
+          });
+          
+          if (!res.ok) {
+            Alert.alert('Error', 'Failed to upload file');
+            setIsUploading(false);
+            return;
+          }
+        }
+      } catch (err) {
+        console.error(err);
+        Alert.alert('Error', 'Failed to send file');
+        setIsUploading(false);
+        return;
+      }
+      setStagedFile(null);
+      setIsUploading(false);
+      
+      if (!messageInput.trim()) {
+        return; // File only
+      }
     }
 
     setIsSending(true);
@@ -418,34 +462,10 @@ export default function ChatScreen() {
       const file = result.assets[0];
       if (!file) return;
 
-      setIsUploading(true);
-      const token = await getSession();
-      if (!token) return;
-
-      const formData = new FormData();
-      formData.append('file', {
-        uri: file.uri,
-        name: file.name,
-        type: file.mimeType || 'application/octet-stream'
-      } as any);
-
-      const res = await fetch(`${API_URL}/api/chats/${conversationId}/messages/upload`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'x-chat-auth': chatAuthToken,
-        },
-        body: formData
-      });
-
-      if (!res.ok) {
-        Alert.alert('Error', 'Failed to upload file');
-      }
+      setStagedFile(file);
     } catch (err: any) {
-      console.error('File upload error:', err);
+      console.error('File pick error:', err);
       Alert.alert('Error', 'Failed to pick file');
-    } finally {
-      setIsUploading(false);
     }
   };
 
@@ -631,16 +651,18 @@ export default function ChatScreen() {
 
     if (type.startsWith('image/')) {
       return (
-        <TouchableOpacity onPress={() => Linking.openURL(url)} style={{ marginBottom: 6 }}>
-          <Image source={{ uri: url }} style={{ width: 200, height: 150, borderRadius: 8 }} resizeMode="cover" />
+        <TouchableOpacity onPress={() => Linking.openURL(url)} style={{ margin: -10, marginBottom: (!item.fileUrl || item.content !== `📎 ${item.fileName}`) ? 6 : -10 }}>
+          <Image source={{ uri: url }} style={{ width: 260, aspectRatio: 1, borderTopLeftRadius: 16, borderTopRightRadius: 16, borderBottomLeftRadius: isMe ? 16 : 4, borderBottomRightRadius: isMe ? 4 : 16 }} resizeMode="cover" />
         </TouchableOpacity>
       );
     }
     if (type.startsWith('video/')) {
       return (
-        <TouchableOpacity onPress={() => Linking.openURL(url)} style={{ marginBottom: 6, padding: 12, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: 8 }}>
-          <Text style={{ fontSize: 16 }}>🎬 {name}</Text>
-          <Text style={{ fontSize: 11, opacity: 0.7 }}>Tap to open video</Text>
+        <TouchableOpacity onPress={() => Linking.openURL(url)} style={{ margin: -10, marginBottom: (!item.fileUrl || item.content !== `📎 ${item.fileName}`) ? 6 : -10 }}>
+          <View style={{ width: 260, aspectRatio: 1.5, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center', borderTopLeftRadius: 16, borderTopRightRadius: 16, borderBottomLeftRadius: isMe ? 16 : 4, borderBottomRightRadius: isMe ? 4 : 16 }}>
+            <Text style={{ fontSize: 40 }}>▶️</Text>
+            <Text style={{ color: 'white', marginTop: 8 }}>{name}</Text>
+          </View>
         </TouchableOpacity>
       );
     }
@@ -808,7 +830,7 @@ export default function ChatScreen() {
                 {renderFileContent(item)}
                 
                 {(!item.fileUrl || item.content !== `📎 ${item.fileName}`) && (
-                  <Text style={isMe ? styles.sentText : styles.receivedText}>{item.content}</Text>
+                  <Text style={[isMe ? styles.sentText : styles.receivedText, item.fileUrl ? { marginTop: 14 } : {}]}>{item.content}</Text>
                 )}
                 
                 <View style={styles.messageMeta}>
@@ -870,6 +892,20 @@ export default function ChatScreen() {
       </View>
 
       <View style={styles.inputAreaWrapper}>
+        {stagedFile && (
+          <View style={[styles.replyPreview, { backgroundColor: isDark ? '#1e293b' : '#f8fafc', borderColor: '#3b82f6' }]}>
+            <Text style={{ fontSize: 24, marginRight: 8 }}>
+              {stagedFile.mimeType?.startsWith('image/') ? '🖼️' : stagedFile.mimeType?.startsWith('video/') ? '🎬' : stagedFile.mimeType?.startsWith('audio/') ? '🎵' : '📄'}
+            </Text>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.replyPreviewText, { color: isDark ? '#f1f5f9' : '#0f172a', fontWeight: 'bold' }]} numberOfLines={1}>{stagedFile.name}</Text>
+              <Text style={{ fontSize: 12, color: '#64748b' }}>Ready to send</Text>
+            </View>
+            <TouchableOpacity onPress={() => setStagedFile(null)} style={{ padding: 4 }}>
+              <Text style={{color: '#e32b2b', fontWeight: 'bold', fontSize: 18}}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        )}
         {replyToMessage && (
           <View style={styles.replyPreview}>
             <Text style={styles.replyPreviewText} numberOfLines={1}>Replying to: {replyToMessage.content}</Text>
@@ -969,30 +1005,46 @@ export default function ChatScreen() {
         </TouchableOpacity>
       </Modal>
 
-      {/* Call UI Modal */}
+      {/* Full-Screen Premium Call UI */}
       <Modal visible={callState !== 'idle'} transparent animationType="fade">
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center', alignItems: 'center', gap: 24 }}>
-          <Text style={{ fontSize: 64 }}>{callType === 'video' ? '📹' : '📞'}</Text>
-          <Text style={{ color: 'white', fontSize: 22, fontWeight: '700' }}>{friendName}</Text>
-          
-          {callState === 'calling' && (
-            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16 }}>Calling...</Text>
-          )}
-          {callState === 'incoming' && (
-            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16 }}>Incoming {callType} call...</Text>
-          )}
-          {callState === 'active' && (
-            <Text style={{ color: 'white', fontSize: 28, fontWeight: '700' }}>{formatCallDuration(callDuration)}</Text>
-          )}
-
-          <View style={{ flexDirection: 'row', gap: 20, marginTop: 24 }}>
+        <View style={{ flex: 1, backgroundColor: '#0f172a', justifyContent: 'space-between', paddingVertical: 80, paddingHorizontal: 32 }}>
+          <View style={{ alignItems: 'center', marginTop: 40 }}>
+            <View style={{ width: 120, height: 120, borderRadius: 60, backgroundColor: '#334155', alignItems: 'center', justifyContent: 'center', marginBottom: 24, borderWidth: 2, borderColor: 'rgba(255,255,255,0.1)' }}>
+              <Text style={{ fontSize: 48 }}>{callType === 'video' ? '📹' : '📞'}</Text>
+            </View>
+            <Text style={{ color: 'white', fontSize: 32, fontWeight: '800', letterSpacing: 1 }}>{friendName}</Text>
+            
+            {callState === 'calling' && (
+              <Text style={{ color: '#94a3b8', fontSize: 18, marginTop: 12 }}>Calling...</Text>
+            )}
             {callState === 'incoming' && (
-              <TouchableOpacity onPress={acceptCall} style={{ backgroundColor: '#10b981', paddingHorizontal: 32, paddingVertical: 16, borderRadius: 999 }}>
-                <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 18 }}>✓ Accept</Text>
+              <Text style={{ color: '#94a3b8', fontSize: 18, marginTop: 12 }}>Incoming {callType} call...</Text>
+            )}
+            {callState === 'active' && (
+              <Text style={{ color: '#10b981', fontSize: 36, fontWeight: '700', marginTop: 12 }}>{formatCallDuration(callDuration)}</Text>
+            )}
+
+            {callType === 'video' && (
+              <View style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', padding: 16, borderRadius: 12, marginTop: 32 }}>
+                <Text style={{ color: '#60a5fa', textAlign: 'center', fontSize: 13 }}>⚠️ Native Video Camera requires 'react-native-webrtc' module installation. Audio signaling is active.</Text>
+              </View>
+            )}
+          </View>
+
+          <View style={{ flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', marginBottom: 40 }}>
+            {callState === 'incoming' && (
+              <TouchableOpacity 
+                onPress={acceptCall} 
+                style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#10b981', alignItems: 'center', justifyContent: 'center', shadowColor: '#10b981', shadowOpacity: 0.5, shadowRadius: 15, elevation: 10 }}
+              >
+                <Text style={{ color: 'white', fontSize: 32 }}>📞</Text>
               </TouchableOpacity>
             )}
-            <TouchableOpacity onPress={() => callState === 'incoming' ? rejectCall() : endCall(true)} style={{ backgroundColor: '#ef4444', paddingHorizontal: 32, paddingVertical: 16, borderRadius: 999 }}>
-              <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 18 }}>✕ End</Text>
+            <TouchableOpacity 
+              onPress={() => callState === 'incoming' ? rejectCall() : endCall(true)} 
+              style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#ef4444', alignItems: 'center', justifyContent: 'center', shadowColor: '#ef4444', shadowOpacity: 0.5, shadowRadius: 15, elevation: 10 }}
+            >
+              <Text style={{ color: 'white', fontSize: 32, transform: [{ rotate: '135deg' }] }}>📞</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1065,8 +1117,24 @@ const getStyles = (isDark: boolean) => {
     sent: { alignSelf: 'flex-end' },
     received: { alignSelf: 'flex-start' },
     messageBubble: { padding: 12, borderRadius: 20, paddingHorizontal: 16 },
-    sentBubble: { backgroundColor: '#3b82f6', borderBottomRightRadius: 4 },
-    receivedBubble: { backgroundColor: bubbleRecv, borderBottomLeftRadius: 4, borderWidth: 1, borderColor: borderCol },
+    sentBubble: {
+      backgroundColor: '#0ea5e9',
+      borderTopLeftRadius: 18,
+      borderTopRightRadius: 18,
+      borderBottomLeftRadius: 18,
+      borderBottomRightRadius: 4,
+      padding: 12,
+    },
+    receivedBubble: {
+      backgroundColor: isDark ? '#334155' : '#f1f5f9',
+      borderTopLeftRadius: 18,
+      borderTopRightRadius: 18,
+      borderBottomLeftRadius: 4,
+      borderBottomRightRadius: 18,
+      padding: 12,
+      borderWidth: 1,
+      borderColor: borderCol,
+    },
     sentText: { color: '#ffffff', fontSize: 15, lineHeight: 22 },
     receivedText: { color: textRecv, fontSize: 15, lineHeight: 22 },
     
