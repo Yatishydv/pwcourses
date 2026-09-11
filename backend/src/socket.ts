@@ -181,9 +181,29 @@ export const initSocket = (httpServer: HttpServer) => {
     });
 
     // ===== WebRTC Call Signaling =====
+    const emitToPeer = async (conversationId: string, event: string, payload: any) => {
+      // Always emit to the chat room for active chat listeners
+      socket.to(`chat_${conversationId}`).emit(event, payload);
+      
+      // Look up the peer to emit to their personal room (for global notifications)
+      try {
+        const conversation = await prisma.conversation.findUnique({
+          where: { id: conversationId },
+          include: { participants: true }
+        });
+        if (conversation) {
+          const peer = conversation.participants.find(p => p.id !== userId);
+          if (peer) {
+            socket.to(peer.id).emit(event, payload);
+          }
+        }
+      } catch (err) {
+        console.error('Error emitting to peer room:', err);
+      }
+    };
+
     socket.on('call_offer', async ({ conversationId, offer, callType }) => {
-      // callType: 'audio' or 'video'
-      socket.to(`chat_${conversationId}`).emit('call_offer', {
+      await emitToPeer(conversationId, 'call_offer', {
         conversationId,
         offer,
         callType,
@@ -191,31 +211,31 @@ export const initSocket = (httpServer: HttpServer) => {
       });
     });
 
-    socket.on('call_answer', ({ conversationId, answer }) => {
-      socket.to(`chat_${conversationId}`).emit('call_answer', {
+    socket.on('call_answer', async ({ conversationId, answer }) => {
+      await emitToPeer(conversationId, 'call_answer', {
         conversationId,
         answer,
         answererId: userId
       });
     });
 
-    socket.on('ice_candidate', ({ conversationId, candidate }) => {
-      socket.to(`chat_${conversationId}`).emit('ice_candidate', {
+    socket.on('ice_candidate', async ({ conversationId, candidate }) => {
+      await emitToPeer(conversationId, 'ice_candidate', {
         conversationId,
         candidate,
         senderId: userId
       });
     });
 
-    socket.on('call_end', ({ conversationId }) => {
-      socket.to(`chat_${conversationId}`).emit('call_end', {
+    socket.on('call_end', async ({ conversationId }) => {
+      await emitToPeer(conversationId, 'call_end', {
         conversationId,
         endedBy: userId
       });
     });
 
-    socket.on('call_reject', ({ conversationId }) => {
-      socket.to(`chat_${conversationId}`).emit('call_reject', {
+    socket.on('call_reject', async ({ conversationId }) => {
+      await emitToPeer(conversationId, 'call_reject', {
         conversationId,
         rejectedBy: userId
       });

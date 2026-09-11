@@ -18,6 +18,7 @@ import LoginScreen from './src/screens/LoginScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import { View, ActivityIndicator } from 'react-native';
+import { CallProvider } from './src/context/CallContext';
 
 const Stack = createNativeStackNavigator();
 
@@ -50,19 +51,21 @@ export default function App() {
   }
 
   return (
-    <NavigationContainer>
-      <StatusBar style="light" />
-      <Stack.Navigator 
-        initialRouteName={initialRoute}
-        screenOptions={{ 
-          headerShown: false,
-          contentStyle: { backgroundColor: '#ffffff' } 
-        }}
-      >
-        <Stack.Screen name="Login" component={LoginScreen} />
-        <Stack.Screen name="Dashboard" component={DashboardScreen} />
-        <Stack.Screen name="Chat" component={ChatScreen} />
-      </Stack.Navigator>
-    </NavigationContainer>
+    <CallProvider>
+      <NavigationContainer>
+        <StatusBar style="light" />
+        <Stack.Navigator 
+          initialRouteName={initialRoute}
+          screenOptions={{ 
+            headerShown: false,
+            contentStyle: { backgroundColor: '#ffffff' } 
+          }}
+        >
+          <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen name="Dashboard" component={DashboardScreen} />
+          <Stack.Screen name="Chat" component={ChatScreen} />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </CallProvider>
   );
 }

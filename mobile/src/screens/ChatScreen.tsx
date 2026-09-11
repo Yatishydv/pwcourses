@@ -6,6 +6,7 @@ import { API_URL } from '../utils/constants';
 import io, { Socket } from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as DocumentPicker from 'expo-document-picker';
+import { useCall } from '../context/CallContext';
 
 export default function ChatScreen() {
   const route = useRoute();
@@ -42,11 +43,7 @@ export default function ChatScreen() {
   
   const [stagedFile, setStagedFile] = useState<any>(null);
   
-  // Call state
-  const [callState, setCallState] = useState<'idle' | 'calling' | 'incoming' | 'active'>('idle');
-  const [callType, setCallType] = useState<'audio' | 'video'>('audio');
-  const [callDuration, setCallDuration] = useState(0);
-  const callTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const { initiateCall } = useCall();
   
   // Files modal
   const [showFilesModal, setShowFilesModal] = useState(false);
@@ -234,25 +231,6 @@ export default function ChatScreen() {
       // Auto-deletion: server permanently deleted messages after 48h
       socketRef.current.on('messages_auto_deleted', ({ messageIds }: any) => {
         setMessages(prev => prev.filter(m => !messageIds.includes(m.id)));
-      });
-
-      // WebRTC Call signaling
-      socketRef.current.on('call_offer', ({ callType: ct, callerId }: any) => {
-        setCallState('incoming');
-        setCallType(ct);
-      });
-
-      socketRef.current.on('call_answer', () => {
-        setCallState('active');
-        startCallTimer();
-      });
-
-      socketRef.current.on('call_end', () => {
-        endCall(false);
-      });
-
-      socketRef.current.on('call_reject', () => {
-        endCall(false);
       });
 
       // Fetch existing messages
@@ -570,50 +548,12 @@ export default function ChatScreen() {
   };
 
   // === Call Functions ===
-  const startCall = (type: 'audio' | 'video') => {
-    setCallType(type);
-    setCallState('calling');
-    socketRef.current?.emit('call_offer', {
-      conversationId,
-      offer: { type: 'offer' }, // Simplified — full WebRTC needs native module
-      callType: type
-    });
+  const handlePhoneCall = () => {
+    initiateCall(conversationId, friendName, 'audio', chatAuthToken);
   };
 
-  const acceptCall = () => {
-    setCallState('active');
-    startCallTimer();
-    socketRef.current?.emit('call_answer', {
-      conversationId,
-      answer: { type: 'answer' }
-    });
-  };
-
-  const rejectCall = () => {
-    socketRef.current?.emit('call_reject', { conversationId });
-    endCall(false);
-  };
-
-  const endCall = (notify = true) => {
-    if (notify) {
-      socketRef.current?.emit('call_end', { conversationId });
-    }
-    if (callTimerRef.current) clearInterval(callTimerRef.current);
-    setCallState('idle');
-    setCallDuration(0);
-  };
-
-  const startCallTimer = () => {
-    setCallDuration(0);
-    callTimerRef.current = setInterval(() => {
-      setCallDuration(prev => prev + 1);
-    }, 1000);
-  };
-
-  const formatCallDuration = (secs: number) => {
-    const m = Math.floor(secs / 60).toString().padStart(2, '0');
-    const s = (secs % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
+  const handleVideoCall = () => {
+    initiateCall(conversationId, friendName, 'video', chatAuthToken);
   };
 
   // === Fetch Shared Files ===
@@ -721,10 +661,10 @@ export default function ChatScreen() {
         </TouchableOpacity>
         <Text style={styles.title}>{friendName}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-          <TouchableOpacity onPress={() => startCall('audio')} style={{ padding: 6 }}>
+          <TouchableOpacity onPress={handlePhoneCall} style={{ padding: 6 }}>
             <Text style={{ fontSize: 16 }}>📞</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => startCall('video')} style={{ padding: 6 }}>
+          <TouchableOpacity onPress={handleVideoCall} style={{ padding: 6 }}>
             <Text style={{ fontSize: 16 }}>📹</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => { fetchSharedFiles(); setShowFilesModal(true); }} style={{ padding: 6 }}>
@@ -1003,51 +943,6 @@ export default function ChatScreen() {
             </ScrollView>
           </View>
         </TouchableOpacity>
-      </Modal>
-
-      {/* Full-Screen Premium Call UI */}
-      <Modal visible={callState !== 'idle'} transparent animationType="fade">
-        <View style={{ flex: 1, backgroundColor: '#0f172a', justifyContent: 'space-between', paddingVertical: 80, paddingHorizontal: 32 }}>
-          <View style={{ alignItems: 'center', marginTop: 40 }}>
-            <View style={{ width: 120, height: 120, borderRadius: 60, backgroundColor: '#334155', alignItems: 'center', justifyContent: 'center', marginBottom: 24, borderWidth: 2, borderColor: 'rgba(255,255,255,0.1)' }}>
-              <Text style={{ fontSize: 48 }}>{callType === 'video' ? '📹' : '📞'}</Text>
-            </View>
-            <Text style={{ color: 'white', fontSize: 32, fontWeight: '800', letterSpacing: 1 }}>{friendName}</Text>
-            
-            {callState === 'calling' && (
-              <Text style={{ color: '#94a3b8', fontSize: 18, marginTop: 12 }}>Calling...</Text>
-            )}
-            {callState === 'incoming' && (
-              <Text style={{ color: '#94a3b8', fontSize: 18, marginTop: 12 }}>Incoming {callType} call...</Text>
-            )}
-            {callState === 'active' && (
-              <Text style={{ color: '#10b981', fontSize: 36, fontWeight: '700', marginTop: 12 }}>{formatCallDuration(callDuration)}</Text>
-            )}
-
-            {callType === 'video' && (
-              <View style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', padding: 16, borderRadius: 12, marginTop: 32 }}>
-                <Text style={{ color: '#60a5fa', textAlign: 'center', fontSize: 13 }}>⚠️ Native Video Camera requires 'react-native-webrtc' module installation. Audio signaling is active.</Text>
-              </View>
-            )}
-          </View>
-
-          <View style={{ flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', marginBottom: 40 }}>
-            {callState === 'incoming' && (
-              <TouchableOpacity 
-                onPress={acceptCall} 
-                style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#10b981', alignItems: 'center', justifyContent: 'center', shadowColor: '#10b981', shadowOpacity: 0.5, shadowRadius: 15, elevation: 10 }}
-              >
-                <Text style={{ color: 'white', fontSize: 32 }}>📞</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity 
-              onPress={() => callState === 'incoming' ? rejectCall() : endCall(true)} 
-              style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#ef4444', alignItems: 'center', justifyContent: 'center', shadowColor: '#ef4444', shadowOpacity: 0.5, shadowRadius: 15, elevation: 10 }}
-            >
-              <Text style={{ color: 'white', fontSize: 32, transform: [{ rotate: '135deg' }] }}>📞</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
       </Modal>
 
       {/* Files Modal */}

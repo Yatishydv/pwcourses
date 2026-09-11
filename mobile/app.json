@@ -25,7 +25,14 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera for video calls.",
+          "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone for audio/video calls."
+        }
+      ]
     ],
     "extra": {
       "eas": {
